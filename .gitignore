@@ -1,0 +1,17 @@
+venv/
+__pycache__/
+*.pyc
+.env
+.streamlit/
+.DS_Store
+*.pkl
+*.db
+.idea/
+*.log
+node_modules/
+.vscode/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coveragegit add .gitignore

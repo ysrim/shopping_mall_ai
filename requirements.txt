@@ -1,0 +1,10 @@
+# requirements.txt >> pip install -r requirements.txt
+streamlit==1.43.0
+google-generativeai==0.7.2
+python-dotenv==1.0.1
+faiss-cpu==1.8.0
+numpy==1.26.4
+pandas==2.2.0
+plotly==5.18.0
+sentence-transformers==2.2.2
+requests==2.31.0
