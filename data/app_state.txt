@@ -1,4 +1,0 @@
-{
-  "documents_loaded": true,
-  "index_loaded": true
-}
