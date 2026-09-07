@@ -1,11 +1,12 @@
 import json
 from pathlib import Path
-from config import PROJECT_ROOT
+from config import STATE_FILE_PATH
+from features.shared.db import ChatDatabase
 
 
 class StateManager:
     def __init__(self):
-        self.state_file = PROJECT_ROOT / "data" / "app_state.json"
+        self.state_file = STATE_FILE_PATH
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
 
     def load_state(self) -> dict:
@@ -20,7 +21,7 @@ class StateManager:
         return {'documents_loaded': False, 'index_loaded': False}
 
     def save_state(self, documents_loaded=None, index_loaded=None):
-        """상태 저장 (변경된 값만 업데이트)"""
+        """상태 저장"""
         try:
             current = self.load_state()
 
@@ -36,9 +37,8 @@ class StateManager:
             print(f"❌ State save error: {e}")
 
     def load_chat_history(self):
-        """채팅 히스토리 로드 (DB에서)"""
+        """채팅 히스토리 로드"""
         try:
-            from modules.db import ChatDatabase
             db = ChatDatabase()
             return db.get_chat_history()
         except Exception as e:

@@ -1,12 +1,11 @@
 import sqlite3
 from pathlib import Path
-from config import DATA_DIR
-from datetime import datetime
+from config import DB_PATH, DATABASE_TIMEOUT
 
 
 class ChatDatabase:
     def __init__(self):
-        self.db_path = DATA_DIR / "chat.db"
+        self.db_path = DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = None
         self._init_db()
@@ -14,7 +13,7 @@ class ChatDatabase:
     def _init_db(self):
         """데이터베이스 초기화"""
         try:
-            self.conn = sqlite3.connect(str(self.db_path), timeout=10)
+            self.conn = sqlite3.connect(str(self.db_path), timeout=DATABASE_TIMEOUT)
             self.conn.row_factory = sqlite3.Row
             cursor = self.conn.cursor()
 
@@ -86,7 +85,6 @@ class ChatDatabase:
             cursor = self.conn.cursor()
             cursor.execute(
                 "SELECT id, timestamp, user_message, assistant_message, rating FROM chat_history ORDER BY id ASC"
-                # DESC → ASC
             )
             rows = cursor.fetchall()
             return [

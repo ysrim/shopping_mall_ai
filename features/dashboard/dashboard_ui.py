@@ -1,11 +1,10 @@
 import streamlit as st
-from modules.db import ChatDatabase
+from features.shared.db import ChatDatabase
 
 
-def show():
+def show(db: ChatDatabase):
     st.title("📊 대시보드")
 
-    db = ChatDatabase()
     stats = db.get_statistics()
 
     col1, col2, col3, col4, col5 = st.columns(5)
