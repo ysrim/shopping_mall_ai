@@ -1,178 +1,209 @@
+import json
+import re
 from pathlib import Path
+from typing import List, Dict, Any
 import numpy as np
-from config import SAMPLE_DATA_PATH, FAISS_INDEX_PATH, EMBEDDING_DIM, FAISS_AVAILABLE
 from modules.api import GeminiAPI
-
-try:
-    import faiss
-except ImportError:
-    pass
+from config import FAISS_INDEX_PATH, EMBEDDING_DIM
 
 
 class RAGPipeline:
-    """RAG 파이프라인"""
-
     def __init__(self):
-        """초기화"""
         self.api = GeminiAPI()
-        self.documents = []
-        self.embeddings = None
-        self.index = None
-        self.index_loaded = False
-
-        # 프로그램 시작 시 저장된 인덱스 로드 시도
+        self.vectorstore = None
+        self.documents = []  # ✅ 추가
+        self.embeddings_data = []
+        self.index_path = FAISS_INDEX_PATH
+        self.chunks = []
         self._auto_load_index()
 
     def _auto_load_index(self):
-        """프로그램 시작 시 저장된 인덱스 자동 로드"""
-        if FAISS_INDEX_PATH.exists():
-            try:
-                self.index = faiss.read_index(str(FAISS_INDEX_PATH))
-                self.index_loaded = True
-                print(f"✅ 저장된 FAISS 인덱스 자동 로드됨: {FAISS_INDEX_PATH}")
-            except Exception as e:
-                print(f"⚠️ 인덱스 자동 로드 실패: {e}")
+        """Load existing FAISS index metadata if present."""
+        try:
+            meta = self.index_path / "metadata.json"
+            if meta.exists():
+                with open(meta, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.chunks = data.get('chunks', [])
+                    self.documents = data.get('documents', [])  # ✅ 추가
+                print(f"✅ Index loaded")
+        except Exception as e:
+            print(f"⚠️ FAISS load failed: {e}")
 
-    def load_documents(self, doc_dir: Path = None) -> int:
-        """문서 로드"""
-        doc_dir = Path(doc_dir or SAMPLE_DATA_PATH)
-        self.documents = []
+    def _split_text(self, text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
+        """고급 텍스트 청크 분할 (문장 + 문자 길이 기반)."""
+        if not text or len(text.strip()) < 10:
+            return []
 
-        print(f"📂 문서 폴더: {doc_dir}")
+        # 문장 분리 (한글 마침표 포함)
+        sentences = re.split(r'(?<=[.!?。\n])\s*', text)
+        sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) > 5]
 
-        if not doc_dir.exists():
-            print(f"❌ 폴더가 없습니다: {doc_dir}")
-            return 0
+        if not sentences:
+            # 문장 분리 실패시 고정 길이로 분할
+            return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size - overlap)]
 
-        txt_files = list(doc_dir.glob("*.txt"))
-        print(f"📄 발견된 .txt 파일: {len(txt_files)}개")
+        chunks = []
+        current_chunk = ""
 
-        for doc_file in txt_files:
-            try:
-                with open(doc_file, 'r', encoding='utf-8') as f:
-                    content = f.read().strip()
-                    if content:
-                        self.documents.append({
-                            "title": doc_file.stem,
-                            "content": content,
-                            "source": str(doc_file)
-                        })
-                        print(f"✅ 로드됨: {doc_file.stem}")
-            except Exception as e:
-                print(f"❌ 로드 실패 {doc_file}: {e}")
+        for sentence in sentences:
+            test_chunk = f"{current_chunk} {sentence}".strip()
 
-        print(f"📚 총 로드된 문서: {len(self.documents)}개")
-        return len(self.documents)
+            if len(test_chunk) <= chunk_size:
+                current_chunk = test_chunk
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk)
+                current_chunk = sentence
+
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        # 최소 길이 필터링
+        chunks = [c for c in chunks if len(c.strip()) > 20]
+        return chunks if chunks else [text]
+
+    def load_documents(self, documents_dir: str) -> bool:
+        """Load all .txt files from a folder."""
+        try:
+            path = Path(documents_dir)
+            if not path.exists():
+                print(f"❌ No folder: {documents_dir}")
+                return False
+            txts = list(path.glob('*.txt'))
+            if not txts:
+                print(f"❌ No .txt files in {documents_dir}")
+                return False
+            self.documents = []
+            for p in txts:
+                try:
+                    with open(p, 'r', encoding='utf-8') as f:
+                        cnt = f.read()
+                    if cnt.strip():
+                        self.documents.append({'title': p.stem, 'content': cnt})
+                        print(f"✅ Loaded: {p.name}")
+                except Exception as e:
+                    print(f"⚠️ Read error ({p.name}): {e}")
+            print(f"✅ {len(self.documents)} documents loaded")
+            return True
+        except Exception as e:
+            print(f"❌ Document load error: {e}")
+            return False
 
     def build_index(self) -> bool:
-        """FAISS 인덱스 생성"""
-        print("\n🔍 인덱싱 시작...")
-
-        if not self.documents:
-            print("❌ 로드된 문서가 없습니다")
-            return False
-
-        if not FAISS_AVAILABLE:
-            print("❌ FAISS가 설치되지 않았습니다")
-            return False
-
+        """Create chunks, embed them via GeminiAPI, and store a FAISS index."""
         try:
-            print("🔄 임베딩 생성 중...")
-            texts = [doc["content"] for doc in self.documents]
-            self.embeddings = self.api.embed_batch(texts)
+            if not self.documents:
+                print("❌ No documents loaded")
+                return False
 
-            print(f"✅ 임베딩 생성 완료: {len(self.embeddings)}개, 차원: {len(self.embeddings[0])}")
+            # 문서 결합
+            combined = '\n\n'.join(d['content'] for d in self.documents)
+            self.chunks = self._split_text(combined)
+            print(f"✅ Chunks: {len(self.chunks)}")
 
-            embeddings_array = np.array(self.embeddings, dtype=np.float32)
-            embedding_dim = embeddings_array.shape[1]
+            if not self.chunks:
+                print("❌ No chunks created")
+                return False
 
-            if embedding_dim != EMBEDDING_DIM:
-                print(f"⚠️ 차원 불일치! {embedding_dim} != {EMBEDDING_DIM}, 자동 조정 중...")
-                if embedding_dim < EMBEDDING_DIM:
-                    padding = np.zeros((embeddings_array.shape[0], EMBEDDING_DIM - embedding_dim), dtype=np.float32)
-                    embeddings_array = np.hstack([embeddings_array, padding])
-                else:
-                    embeddings_array = embeddings_array[:, :EMBEDDING_DIM]
+            # 임베딩 생성
+            print("🔄 Generating embeddings...")
+            embeddings = self.api.embed_batch(self.chunks)
 
-            self.index = faiss.IndexFlatL2(EMBEDDING_DIM)
-            self.index.add(embeddings_array)
+            if not embeddings:
+                print("❌ Embedding failed")
+                return False
 
-            FAISS_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-            faiss.write_index(self.index, str(FAISS_INDEX_PATH))
+            dim = len(embeddings[0])
+            print(f"✅ Embeddings: {len(embeddings)}, Dim: {dim}")
 
-            self.index_loaded = True
-            print(f"✅ 인덱싱 성공! 저장 위치: {FAISS_INDEX_PATH}")
+            if dim != EMBEDDING_DIM:
+                print(f"⚠️ Dimension mismatch: config {EMBEDDING_DIM}, got {dim}")
+
+            # FAISS 인덱스 생성
+            print("🔄 Creating FAISS index...")
+            import faiss
+            arr = np.array(embeddings, dtype=np.float32)
+            index = faiss.IndexFlatL2(dim)
+            index.add(arr)
+
+            # 저장
+            self.index_path.mkdir(parents=True, exist_ok=True)
+            meta = {
+                'chunks': self.chunks,
+                'documents': self.documents,
+                'dimension': dim,
+                'chunk_count': len(self.chunks)
+            }
+
+            with open(self.index_path / 'metadata.json', 'w', encoding='utf-8') as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+
+            faiss.write_index(index, str(self.index_path / 'index.faiss'))
+            np.save(str(self.index_path / 'embeddings.npy'), arr)
+
+            self.vectorstore = index
+            self.embeddings_data = embeddings
+
+            print(f"✅ Index created successfully")
             return True
-
         except Exception as e:
-            print(f"❌ 인덱싱 오류: {e}")
+            print(f"❌ Indexing error: {e}")
             import traceback
             traceback.print_exc()
             return False
 
-    def search(self, query: str, top_k: int = 5) -> list:
-        """쿼리로 검색"""
-        if not self.index_loaded:
-            print("❌ 인덱스가 로드되지 않았습니다")
-            return []
-
+    def retrieve(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
+        """Search the FAISS index for the most similar chunks."""
         try:
-            query_embedding = np.array([self.api.embed(query)], dtype=np.float32)
-            distances, indices = self.index.search(query_embedding, top_k)
-
+            if not self.chunks:
+                meta_path = self.index_path / 'metadata.json'
+                if meta_path.exists():
+                    with open(meta_path, 'r', encoding='utf-8') as f:
+                        self.chunks = json.load(f).get('chunks', [])
+            if not self.chunks:
+                print("❌ No chunk data")
+                return []
+            q_emb = self.api.embed(query)
+            if not q_emb:
+                print("❌ Query embedding failed")
+                return []
+            import faiss
+            idx_file = self.index_path / 'index.faiss'
+            if not idx_file.exists():
+                print("❌ FAISS file missing")
+                return []
+            index = faiss.read_index(str(idx_file))
+            D, I = index.search(np.array([q_emb], dtype=np.float32), min(top_k, len(self.chunks)))
             results = []
-            for idx, distance in zip(indices[0], distances[0]):
-                if idx < len(self.documents):
-                    doc = self.documents[idx]
-                    results.append({
-                        "title": doc["title"],
-                        "content": doc["content"][:500],
-                        "similarity": 1 / (1 + distance)
-                    })
+            for dist, idx in zip(D[0], I[0]):
+                if 0 <= idx < len(self.chunks):
+                    results.append(
+                        {'content': self.chunks[int(idx)], 'source': 'Retrieved Document', 'relevance': float(dist)})
+            if results:
+                print(f"✅ Retrieved {len(results)} chunks")
             return results
         except Exception as e:
-            print(f"❌ 검색 오류: {e}")
+            print(f"❌ Retrieval error: {e}")
             return []
 
-    def generate_prompt(self, query: str, search_results: list) -> str:
-        """프롬프트 생성"""
-        references = "\n\n".join([
-            f"[{r['title']}]\n{r['content']}"
-            for r in search_results
-        ])
-
-        return f"""당신은 전문적인 고객 상담원입니다.
-
-[참고 자료]
-{references}
-
-[질문]
-{query}
-
-위의 참고 자료를 기반으로 정확하고 친절하게 답변하세요."""
-
-    def generate_response(self, prompt: str, temperature: float = 0.3, max_tokens: int = 2000) -> str:
-        """응답 생성"""
-        return self.api.generate(prompt, temperature, max_tokens)
-
-    def generate_response_streaming(self, prompt: str, temperature: float = 0.3, max_tokens: int = 2000):
-        """스트리밍 응답"""
-        for text in self.api.generate_streaming(prompt, temperature, max_tokens):
-            yield text
-
     def clear_cache(self):
-        """임베딩 캐시 초기화"""
+        """Clear embedding cache"""
         try:
-            self.api.embedding_cache.clear()  # ← 이제 정상 작동
-            print("✅ 임베딩 캐시가 초기화되었습니다")
+            self.api.embedding_cache.clear()
+            print("✅ Cache cleared")
         except Exception as e:
-            print(f"❌ 캐시 초기화 오류: {e}")
+            print(f"❌ Cache clear error: {e}")
 
-    def get_usage_stats(self) -> dict:
-        """사용 통계"""
-        stats = self.api.get_usage_stats()
-        stats.update({
-            "documents_loaded": len(self.documents),
-            "index_loaded": self.index_loaded
-        })
-        return stats
+    def reset_index(self):
+        """Reset FAISS index"""
+        try:
+            if self.index_path.exists():
+                import shutil
+                shutil.rmtree(self.index_path)
+                print("✅ Index reset")
+            self.vectorstore = None
+            self.documents = []
+            self.chunks = []
+        except Exception as e:
+            print(f"❌ Reset error: {e}")

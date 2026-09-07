@@ -1,16 +1,16 @@
+# modules/api.py
 import google.generativeai as genai
 from config import (
     GOOGLE_API_KEY, GENERATION_MODEL, EMBEDDING_MODEL,
-    EMBEDDING_TASK, EMBEDDING_DIM, EMBEDDING_CACHE_PATH
+    EMBEDDING_TASK, EMBEDDING_DIM, EMBEDDING_CACHE_PATH, NUM_WORKERS
 )
 from pathlib import Path
 import pickle
 from concurrent.futures import ThreadPoolExecutor
 
-
 class EmbeddingCache:
+    """임베딩 캐시 관리"""
     def __init__(self, cache_path):
-        """캐시 초기화"""
         self.cache_path = Path(cache_path)
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         self.cache = self.load()
@@ -32,21 +32,17 @@ class EmbeddingCache:
         try:
             with open(self.cache_path, 'wb') as f:
                 pickle.dump(self.cache, f)
-                print(f"✅ Cache saved: {len(self.cache)} items")
         except Exception as e:
             print(f"❌ Cache save error: {e}")
 
     def get(self, key):
-        """캐시에서 값 가져오기"""
         return self.cache.get(key)
 
     def set(self, key, value):
-        """캐시에 값 저장"""
         self.cache[key] = value
         self.save()
 
     def clear(self):
-        """캐시 초기화"""
         self.cache = {}
         try:
             if self.cache_path.exists():
@@ -61,19 +57,17 @@ embedding_cache = EmbeddingCache(str(EMBEDDING_CACHE_PATH))
 
 
 class GeminiAPI:
-    """Google Gemini API 래퍼 (최신 고성능 모델)"""
+    """Google Gemini API 래퍼"""
 
     @staticmethod
     def embed(text: str, task_type: str = EMBEDDING_TASK) -> list:
-        """텍스트 임베딩 (models/gemini-embedding-001)"""
+        """텍스트 임베딩"""
         try:
             cache_key = f"{text}_{task_type}"
             cached_embedding = embedding_cache.get(cache_key)
             if cached_embedding:
-                print(f"✅ Embedding from cache")
                 return cached_embedding
 
-            # models/gemini-embedding-001 사용
             response = genai.embed_content(
                 model=EMBEDDING_MODEL,
                 content=text,
@@ -84,28 +78,32 @@ class GeminiAPI:
             return embedding
         except Exception as e:
             print(f"❌ Embedding error: {e}")
-            raise
+            return None
 
     @staticmethod
     def embed_batch(texts: list, task_type: str = EMBEDDING_TASK) -> list:
         """배치 임베딩"""
         embeddings = []
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
             futures = [
                 executor.submit(GeminiAPI.embed, text, task_type)
                 for text in texts
             ]
             for future in futures:
                 try:
-                    embeddings.append(future.result())
+                    result = future.result()
+                    if result:
+                        embeddings.append(result)
+                    else:
+                        embeddings.append([0.0] * EMBEDDING_DIM)
                 except Exception as e:
-                    print(f"❌ Batch embedding error: {e}")
+                    print(f"❌ Batch error: {e}")
                     embeddings.append([0.0] * EMBEDDING_DIM)
         return embeddings
 
     @staticmethod
     def generate(prompt: str, temperature: float = 0.3, max_tokens: int = 2000) -> str:
-        """텍스트 생성 (gemini-3.8-flash)"""
+        """텍스트 생성"""
         try:
             model = genai.GenerativeModel(GENERATION_MODEL)
             response = model.generate_content(
@@ -118,7 +116,7 @@ class GeminiAPI:
             return response.text
         except Exception as e:
             print(f"❌ Generation error: {e}")
-            raise
+            return "죄송합니다. 응답 생성에 실패했습니다."
 
     @staticmethod
     def generate_streaming(prompt: str, temperature: float = 0.3, max_tokens: int = 2000):
@@ -138,14 +136,4 @@ class GeminiAPI:
                     yield chunk.text
         except Exception as e:
             print(f"❌ Streaming error: {e}")
-            raise
-
-    @staticmethod
-    def get_usage_stats() -> dict:
-        """API 사용 통계"""
-        return {
-            "cache_size": len(embedding_cache.cache),
-            "cache_path": str(EMBEDDING_CACHE_PATH),
-            "generation_model": GENERATION_MODEL,
-            "embedding_model": EMBEDDING_MODEL
-        }
+            yield "죄송합니다. 응답 생성에 실패했습니다."

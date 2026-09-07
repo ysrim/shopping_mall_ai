@@ -1,58 +1,46 @@
 import json
 from pathlib import Path
-from config import STATE_FILE_PATH
+from config import PROJECT_ROOT
 
 
 class StateManager:
-    """앱 상태 관리"""
+    def __init__(self):
+        self.state_file = PROJECT_ROOT / "data" / "app_state.json"
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def load_state() -> dict:
+    def load_state(self) -> dict:
         """저장된 상태 로드"""
         try:
-            if STATE_FILE_PATH.exists():
-                with open(STATE_FILE_PATH, "r", encoding="utf-8") as f:
-                    state = json.load(f)
-                    print(f"✅ State loaded: {state}")
-                    return state
+            if self.state_file.exists():
+                with open(self.state_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
         except Exception as e:
-            print(f"❌ State load error: {e}")
+            print(f"⚠️ State load error: {e}")
 
-        return {"documents_loaded": False, "index_loaded": False}
+        return {'documents_loaded': False, 'index_loaded': False}
 
-    @staticmethod
-    def save_state(documents_loaded: bool, index_loaded: bool):
-        """상태 저장"""
+    def save_state(self, documents_loaded=None, index_loaded=None):
+        """상태 저장 (변경된 값만 업데이트)"""
         try:
-            state = {
-                "documents_loaded": documents_loaded,
-                "index_loaded": index_loaded
-            }
-            with open(STATE_FILE_PATH, "w", encoding="utf-8") as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
-            print(f"✅ State saved")
+            current = self.load_state()
+
+            if documents_loaded is not None:
+                current['documents_loaded'] = documents_loaded
+            if index_loaded is not None:
+                current['index_loaded'] = index_loaded
+
+            with open(self.state_file, 'w', encoding='utf-8') as f:
+                json.dump(current, f, ensure_ascii=False, indent=2)
+            print(f"✅ State saved: {current}")
         except Exception as e:
             print(f"❌ State save error: {e}")
 
-    @staticmethod
-    def reset_state():
-        """상태 초기화"""
-        try:
-            if STATE_FILE_PATH.exists():
-                STATE_FILE_PATH.unlink()
-            print("✅ State reset")
-        except Exception as e:
-            print(f"❌ State reset error: {e}")
-
-    @staticmethod
-    def load_chat_history():
-        """DB에서 채팅 히스토리 로드"""
+    def load_chat_history(self):
+        """채팅 히스토리 로드 (DB에서)"""
         try:
             from modules.db import ChatDatabase
             db = ChatDatabase()
-            chats = db.get_chat_history(limit=100)
-            print(f"✅ Chat history loaded: {len(chats)} chats")
-            return chats
+            return db.get_chat_history()
         except Exception as e:
-            print(f"❌ Chat history load error: {e}")
+            print(f"⚠️ Chat history load error: {e}")
             return []
