@@ -1,134 +1,446 @@
-# features/chat/chatbot_service.py
-from langchain_core.output_parsers import StrOutputParser
 from features.rag import Retriever
 from features.shared.api import llm_factory
 from features.shared.db import ChatDatabase
-from .prompts import GENERAL_PROMPT, SHIPPING_PROMPT, RETURN_PROMPT, CATEGORY_KEYWORDS
-from config import TEMPERATURE
+from config import LLM_PROVIDER
+from typing import Optional
 
 
 class ChatbotService:
-    """채팅봇 서비스 (멀티 LLM 지원)"""
-
-    def __init__(self, retriever: Retriever, db: ChatDatabase, llm_provider: str = "gemini"):
+    def __init__(self, retriever: Retriever, db: ChatDatabase, llm_provider: str = None):
         """
-        초기화
+        챗봇 서비스 초기화
 
         Args:
-            retriever: RAG 리트리버
-            db: 채팅 데이터베이스
-            llm_provider: "gemini" 또는 "ollama"
+            retriever: RAG 문서 검색기
+            db: 대화 저장 데이터베이스
+            llm_provider: LLM 프로바이더 ("gemini" 또는 "ollama")
         """
         self.retriever = retriever
         self.db = db
-        self.llm_provider = llm_provider
-        self.embedding_provider = None
+        self.llm_provider = llm_provider or LLM_PROVIDER
+        self.llm = None
+        self.top_k = 2  # 검색 결과 상위 K개
+
+        print(f"🔗 ChatbotService 초기화")
+        print(f"   - LLM 프로바이더: {self.llm_provider}")
+        print(f"   - 검색 결과: {self.top_k}개\n")
+
         self._init_chains()
 
     def _init_chains(self):
         """LLM 체인 초기화"""
         try:
-            llm_api = llm_factory.create_llm_api(self.llm_provider)
-            self.llm = llm_api.get_llm()
-
-            self.chains = {
-                'general': GENERAL_PROMPT | self.llm | StrOutputParser(),
-                'shipping': SHIPPING_PROMPT | self.llm | StrOutputParser(),
-                'return': RETURN_PROMPT | self.llm | StrOutputParser()
-            }
-            print(f"✅ {self.llm_provider.upper()} 체인 초기화 완료")
+            print("🔗 LLM 체인 초기화 중...")
+            self.llm_api = llm_factory.create_llm_api(self.llm_provider)
+            self.llm = self.llm_api.get_llm()
+            print(f"✅ LLM 체인 초기화 완료\n")
         except Exception as e:
-            print(f"❌ 체인 초기화 실패: {e}")
+            print(f"❌ LLM 체인 초기화 실패: {str(e)}")
             raise
 
-    def switch_provider(self, new_provider: str):
+    def _build_prompt(self, query: str, context: str) -> str:
         """
-        런타임에 LLM 프로바이더 변경
+        RAG 프롬프트 생성
 
         Args:
-            new_provider: "gemini" 또는 "ollama"
-        """
-        if self.llm_provider != new_provider:
-            print(f"🔄 LLM 프로바이더 변경: {self.llm_provider} → {new_provider}")
-            self.llm_provider = new_provider
-            self._init_chains()
-
-    def set_embedding_provider(self, embedding_provider: str):
-        """임베딩 프로바이더 설정"""
-        self.embedding_provider = embedding_provider
-
-    def _detect_category(self, question: str) -> str:
-        """질문 카테고리 감지"""
-        for category, keywords in CATEGORY_KEYWORDS.items():
-            if any(word in question for word in keywords):
-                return category
-        return 'general'
-
-    def process_message(self, user_input: str) -> str:
-        """
-        사용자 입력 처리
-
-        Args:
-            user_input: 사용자 질문
+            query: 사용자 질문
+            context: 검색된 문서 내용
 
         Returns:
-            AI 응답
+            생성된 프롬프트
+        """
+        prompt = f"""당신은 전문적이고 친절한 쇼핑 고객 서비스 어시스턴트입니다.
+아래의 제공된 정보를 바탕으로 사용자의 질문에 정확하고 도움이 되는 답변을 해주세요.
+
+【제공된 정보】
+{context}
+
+【사용자의 질문】
+{query}
+
+【답변 지침】
+1. 제공된 정보에만 기반하여 답변하세요.
+2. 정보에 없는 내용은 "해당 정보는 제공되지 않았습니다"라고 명확히 답변하세요.
+3. 친절하고 존중하는 태도로 답변하세요.
+4. 필요한 경우 요약이나 구조화된 형식으로 답변하세요.
+
+답변:"""
+        return prompt
+
+    def _format_context(self, retrieved_docs: list) -> str:
+        """
+        검색된 문서들을 컨텍스트로 포맷팅
+
+        Args:
+            retrieved_docs: 검색된 문서 리스트
+
+        Returns:
+            포맷팅된 컨텍스트 문자열
+        """
+        if not retrieved_docs:
+            return "검색된 정보가 없습니다."
+
+        context_parts = []
+        for i, doc in enumerate(retrieved_docs, 1):
+            content = doc.get('chunk', doc.get('content', ''))
+            relevance = doc.get('distance', 'N/A')
+            context_parts.append(f"[정보 {i}] (유사도: {relevance})\n{content}")
+
+        return "\n\n".join(context_parts)
+
+    def _extract_response(self, llm_response) -> str:
+        """
+        LLM 응답에서 텍스트 추출
+
+        Args:
+            llm_response: LLM이 반환한 응답 (다양한 타입 가능)
+
+        Returns:
+            텍스트 문자열
+        """
+        print(f"📦 LLM 응답 타입: {type(llm_response).__name__}")
+        print(f"📦 LLM 응답 값: {repr(llm_response)[:150]}...\n")
+
+        # 1. 문자열이면 그대로 반환
+        if isinstance(llm_response, str):
+            print(f"   → 문자열 타입, 직접 반환")
+            return llm_response
+
+        # 2. dict 타입 처리
+        elif isinstance(llm_response, dict):
+            print(f"   → dict 타입 처리 중...")
+
+            # 'text' 키 확인 (Gemini API 형식)
+            if 'text' in llm_response:
+                result = str(llm_response['text']).strip()
+                print(f"   → 'text' 키에서 추출: {result[:50]}...")
+                return result
+
+            # 'content' 키 확인 (일반 형식)
+            elif 'content' in llm_response:
+                result = str(llm_response['content']).strip()
+                print(f"   → 'content' 키에서 추출: {result[:50]}...")
+                return result
+
+            # 'parts' 키 확인 (LangChain 형식)
+            elif 'parts' in llm_response:
+                parts = llm_response['parts']
+                if isinstance(parts, list) and len(parts) > 0:
+                    if isinstance(parts[0], dict) and 'text' in parts[0]:
+                        result = str(parts[0]['text']).strip()
+                        print(f"   → 'parts[0].text'에서 추출: {result[:50]}...")
+                        return result
+                    else:
+                        result = str(parts[0]).strip()
+                        print(f"   → 'parts[0]'에서 추출: {result[:50]}...")
+                        return result
+
+            # 다른 모든 값을 문자열로 변환
+            result = str(llm_response)
+            print(f"   → dict를 문자열로 변환: {result[:50]}...")
+            return result
+
+        # 3. 리스트 타입 처리
+        elif isinstance(llm_response, list):
+            print(f"   → 리스트 타입 처리 중...")
+
+            if len(llm_response) > 0:
+                # 첫 번째 요소가 dict인 경우
+                if isinstance(llm_response[0], dict):
+                    # 'text' 키 확인
+                    if 'text' in llm_response[0]:
+                        result = str(llm_response[0]['text']).strip()
+                        print(f"   → list[0]['text']에서 추출: {result[:50]}...")
+                        return result
+                    # 'content' 키 확인
+                    elif 'content' in llm_response[0]:
+                        result = str(llm_response[0]['content']).strip()
+                        print(f"   → list[0]['content']에서 추출: {result[:50]}...")
+                        return result
+                    else:
+                        result = str(llm_response[0])
+                        print(f"   → list[0]을 문자열로 변환: {result[:50]}...")
+                        return result
+                else:
+                    result = str(llm_response[0]).strip()
+                    print(f"   → list[0]에서 추출: {result[:50]}...")
+                    return result
+            else:
+                print(f"   → 빈 리스트, 오류 메시지 반환")
+                return "응답을 생성할 수 없습니다."
+
+        # 4. 객체 타입 처리 (content 속성 확인)
+        elif hasattr(llm_response, 'content'):
+            print(f"   → content 속성이 있는 객체")
+            content = llm_response.content
+
+            # content가 리스트인 경우
+            if isinstance(content, list):
+                if len(content) > 0:
+                    result = str(content[0]).strip()
+                    print(f"   → content[0]에서 추출: {result[:50]}...")
+                    return result
+                else:
+                    print(f"   → content가 빈 리스트")
+                    return "응답을 생성할 수 없습니다."
+            else:
+                result = str(content).strip()
+                print(f"   → content에서 추출: {result[:50]}...")
+                return result
+
+        # 5. 기타 타입 (최후의 수단)
+        else:
+            print(f"   → 기타 타입, str() 변환")
+            result = str(llm_response).strip()
+            print(f"   → 변환 결과: {result[:50]}...")
+            return result
+
+    def process_message(self, user_message: str) -> str:
+        """
+        사용자 메시지 처리 및 답변 생성
+
+        Args:
+            user_message: 사용자 질문
+
+        Returns:
+            생성된 답변
         """
         try:
-            # RAG 검색
-            results = self.retriever.retrieve(
-                user_input,
-                top_k=3,
-                embedding_provider=self.embedding_provider
+            print(f"📝 메시지 처리 중: {user_message[:50]}...\n")
+
+            # 1. 문서 검색 (RAG)
+            print("🔍 문서 검색 중...")
+            retrieved_docs = self.retriever.retrieve(user_message, top_k=self.top_k)
+
+            if not retrieved_docs:
+                print("⚠️ 검색된 문서 없음\n")
+                response = "죄송합니다. 관련 정보를 찾을 수 없습니다. 다시 질문해주세요."
+            else:
+                print(f"✅ {len(retrieved_docs)}개 문서 검색 완료")
+                for i, doc in enumerate(retrieved_docs, 1):
+                    print(f"   [{i}] 유사도: {doc.get('distance', 'N/A')}, 내용길이: {len(doc.get('chunk', ''))}자")
+                print()
+
+                # 2. 컨텍스트 구성
+                print("📋 컨텍스트 구성 중...")
+                context = self._format_context(retrieved_docs)
+                print(f"✅ 컨텍스트 구성 완료 (길이: {len(context)}자)\n")
+
+                # 3. 프롬프트 생성
+                print("🎯 프롬프트 생성 중...")
+                prompt = self._build_prompt(user_message, context)
+                print(f"✅ 프롬프트 생성 완료 (길이: {len(prompt)}자)\n")
+
+                # 4. LLM으로 응답 생성
+                print("🤖 LLM으로 응답 생성 중...")
+                llm_response = self.llm.invoke(prompt)
+
+                # 5. 응답 처리 (여러 타입 지원)
+                response = self._extract_response(llm_response)
+
+                # 6. 응답이 문자열인지 최종 확인
+                if not isinstance(response, str):
+                    print(f"⚠️ 최종 응답이 문자열이 아님: {type(response)}")
+                    response = str(response).strip()
+
+                print(f"✅ 응답 생성 완료 (길이: {len(response)}자)\n")
+
+            # 7. 카테고리 분류 (선택)
+            category = self._classify_category(user_message)
+
+            # 8. 대화 저장
+            print("💾 대화 저장 중...")
+
+            # response가 문자열인지 확인
+            if not isinstance(response, str):
+                print(f"⚠️ 응답이 문자열이 아님: {type(response)}")
+                response = str(response)
+
+            chat_id = self.db.save_chat(
+                user_message=user_message,
+                assistant_message=response,
+                category=category,
+                llm_provider=self.llm_provider
             )
-            context = "\n".join([r['content'] for r in results]) if results else "관련 정보를 찾을 수 없습니다."
-
-            # 카테고리 감지
-            category = self._detect_category(user_input)
-
-            # 체인 실행
-            chain = self.chains.get(category, self.chains['general'])
-            response = chain.invoke({
-                'context': context,
-                'question': user_input
-            })
-
-            # DB 저장
-            self.db.save_chat(user_input, response)
-            print(f"✅ 채팅 저장 완료 (카테고리: {category}, LLM: {self.llm_provider})")
+            print(f"✅ 대화 저장 완료 (ID: {chat_id})\n")
 
             return response
+
         except Exception as e:
-            print(f"❌ 메시지 처리 오류: {e}")
+            print(f"❌ 메시지 처리 실패: {str(e)}")
             import traceback
-            traceback.print_exc()
-            return "오류가 발생했습니다. 다시 시도해주세요."
+            print(traceback.format_exc())
+            return f"오류가 발생했습니다: {str(e)}"
 
-    def rate_message(self, chat_id: int, rating: int) -> bool:
-        """메시지 평가"""
-        return self.db.save_rating(chat_id, rating)
+    def _classify_category(self, query: str) -> Optional[str]:
+        """
+        질문의 카테고리 분류 (간단한 키워드 기반)
 
-    def get_history(self):
-        """데이터베이스에서 채팅 히스토리 조회"""
+        Args:
+            query: 사용자 질문
+
+        Returns:
+            카테고리
+        """
+        query_lower = query.lower()
+
+        # 배송 관련
+        if any(word in query_lower for word in ['배송', '택배', '배달', '도착', 'shipping', 'delivery']):
+            return 'shipping'
+
+        # 반품/교환 관련
+        elif any(word in query_lower for word in ['반품', '교환', '환불', 'return', 'exchange', 'refund']):
+            return 'return'
+
+        # 결제 관련
+        elif any(word in query_lower for word in ['결제', '결제방법', '카드', '계좌', 'payment', 'pay']):
+            return 'payment'
+
+        # 상품 관련
+        elif any(word in query_lower for word in ['상품', '제품', '상세', '사양', 'product', 'item']):
+            return 'product'
+
+        # 계정/개인정보 관련
+        elif any(word in query_lower for word in ['계정', '로그인', '회원', '비밀번호', 'account', 'login']):
+            return 'account'
+
+        # 기타
+        else:
+            return 'general'
+
+    def get_history(self, limit: int = 50) -> list:
+        """
+        대화 히스토리 조회
+
+        Args:
+            limit: 조회 개수 (기본: 50)
+
+        Returns:
+            대화 리스트
+        """
         try:
-            chats = self.db.get_chat_history()
-
-            # 각 채팅 항목이 필요한 필드를 모두 가지고 있는지 확인
-            result = []
-            for chat in chats:
-                # 필드 검증
-                if isinstance(chat, dict):
-                    validated_chat = {
-                        'id': chat.get('id'),
-                        'user_message': chat.get('user_message', ''),
-                        'assistant_message': chat.get('assistant_message', ''),
-                        'rating': chat.get('rating'),
-                        'timestamp': chat.get('timestamp')
-                    }
-                    result.append(validated_chat)
-
-            return result
+            print(f"📋 히스토리 조회 중 (최대 {limit}개)...")
+            history = self.db.get_history(limit)
+            print(f"✅ 히스토리 조회 완료: {len(history)}개\n")
+            return history
         except Exception as e:
-            print(f"❌ 히스토리 조회 오류: {str(e)}")
+            print(f"❌ 히스토리 조회 실패: {str(e)}")
             return []
 
+    def rate_message(self, chat_id: int, rating: int) -> bool:
+        """
+        메시지에 평가 추가
+
+        Args:
+            chat_id: 대화 ID
+            rating: 평가 (1: 좋음, 0: 보통, -1: 나쁨)
+
+        Returns:
+            성공 여부
+        """
+        try:
+            rating_emoji = {1: "👍", 0: "😐", -1: "👎"}.get(rating, "❓")
+            print(f"⭐ 평가 저장 중: {rating_emoji} (ID: {chat_id})...")
+            success = self.db.rate_message(chat_id, rating)
+            if success:
+                print(f"✅ 평가 저장 완료\n")
+            return success
+        except Exception as e:
+            print(f"❌ 평가 저장 실패: {str(e)}")
+            return False
+
+    def delete_message(self, chat_id: int) -> bool:
+        """
+        대화 삭제
+
+        Args:
+            chat_id: 대화 ID
+
+        Returns:
+            성공 여부
+        """
+        try:
+            print(f"🗑️ 대화 삭제 중 (ID: {chat_id})...")
+            success = self.db.delete_chat(chat_id)
+            if success:
+                print(f"✅ 대화 삭제 완료\n")
+            return success
+        except Exception as e:
+            print(f"❌ 대화 삭제 실패: {str(e)}")
+            return False
+
+    def clear_history(self) -> bool:
+        """
+        모든 대화 히스토리 삭제
+
+        Returns:
+            성공 여부
+        """
+        try:
+            print(f"🗑️ 모든 대화 삭제 중...")
+            success = self.db.clear_history()
+            if success:
+                print(f"✅ 모든 대화 삭제 완료\n")
+            return success
+        except Exception as e:
+            print(f"❌ 대화 삭제 실패: {str(e)}")
+            return False
+
+    def get_statistics(self) -> dict:
+        """
+        대화 통계 조회
+
+        Returns:
+            통계 정보
+        """
+        try:
+            print(f"📊 통계 조회 중...")
+            stats = self.db.get_statistics()
+            print(f"✅ 통계 조회 완료\n")
+            return stats
+        except Exception as e:
+            print(f"❌ 통계 조회 실패: {str(e)}")
+            return {}
+
+    def change_llm_provider(self, provider: str) -> bool:
+        """
+        LLM 프로바이더 변경
+
+        Args:
+            provider: 새로운 프로바이더 ("gemini" 또는 "ollama")
+
+        Returns:
+            성공 여부
+        """
+        try:
+            if provider not in ["gemini", "ollama"]:
+                print(f"❌ 유효하지 않은 프로바이더: {provider}")
+                return False
+
+            print(f"🔄 LLM 프로바이더 변경 중: {self.llm_provider} → {provider}...")
+            self.llm_provider = provider
+            self._init_chains()
+            print(f"✅ LLM 프로바이더 변경 완료\n")
+            return True
+        except Exception as e:
+            print(f"❌ 프로바이더 변경 실패: {str(e)}")
+            return False
+
+    def update_retriever(self, retriever: Retriever) -> bool:
+        """
+        문서 검색기 업데이트
+
+        Args:
+            retriever: 새로운 Retriever 객체
+
+        Returns:
+            성공 여부
+        """
+        try:
+            print(f"🔄 Retriever 업데이트 중...")
+            self.retriever = retriever
+            print(f"✅ Retriever 업데이트 완료\n")
+            return True
+        except Exception as e:
+            print(f"❌ Retriever 업데이트 실패: {str(e)}")
+            return False

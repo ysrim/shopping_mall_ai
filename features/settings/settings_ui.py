@@ -1,223 +1,278 @@
 import streamlit as st
-from features.rag import DocumentLoader, TextSplitter, EmbeddingGenerator, FAISSIndexBuilder
+from pathlib import Path
+from features.rag.document_loader import DocumentLoader
+from features.rag.text_splitter import TextSplitter
+from features.rag.embedding_generator import EmbeddingGenerator
+from features.rag.faiss_indexer import FAISSIndexBuilder
 from features.shared.state_manager import StateManager
 from features.shared.api import llm_factory
-from config import PROJECT_ROOT, SAMPLE_DATA_PATH, EMBEDDING_PROVIDER
+from features.shared.db import ChatDatabase
+from config import (
+    SAMPLE_DATA_PATH,
+    FAISS_INDEX_PATH,
+    OLLAMA_EMBEDDING_DIM,
+    OLLAMA_EMBEDDING_MODEL,
+    DB_PATH,
+)
 import shutil
 
 
 def show():
     st.title("⚙️ 설정")
-
     state = StateManager()
-
-    # ============ LLM 및 임베딩 프로바이더 선택 ============
-    st.subheader("🤖 모델 선택")
-
-    # ✅ 현재 상태 로드
     current_state = state.load_state()
-    current_llm = current_state.get("llm_provider", "ollama")  # ✅ 기본값: ollama
-    current_embedding = current_state.get("embedding_provider", "ollama")  # ✅ 기본값: ollama
 
-    print(f"📊 settings_ui 로드됨")
-    print(f"   현재 저장된 LLM: {current_llm}")
-    print(f"   현재 저장된 임베딩: {current_embedding}")
+    # ==================== 현재 상태 표시 ====================
+    col1, col2 = st.columns(2)
+    with col1:
+        docs_status = "✅" if current_state.get("documents_loaded") else "❌"
+        st.metric("문서", f"{docs_status} {'로드됨' if current_state.get('documents_loaded') else '미로드'}")
+    with col2:
+        index_status = "✅" if current_state.get("index_loaded") else "❌"
+        st.metric("인덱스", f"{index_status} {'생성됨' if current_state.get('index_loaded') else '미생성'}")
 
+    st.divider()
+
+    # ==================== LLM 프로바이더 선택 ====================
+    st.subheader("🤖 모델 선택")
     col1, col2 = st.columns(2)
 
     with col1:
         st.write("**LLM (생성) 모델:**")
+        current_llm = current_state.get("llm_provider", "gemini")
         llm_provider = st.radio(
-            "LLM 프로바이더 선택",
+            "LLM 프로바이더",
             options=["gemini", "ollama"],
             index=0 if current_llm == "gemini" else 1,
             label_visibility="collapsed",
-            key="llm_provider_select_unique"
+            key="llm_provider_radio",
         )
-        print(f"✅ LLM 라디오 선택: {llm_provider}")
 
     with col2:
         st.write("**임베딩 모델:**")
-        embedding_provider = st.radio(
-            "임베딩 프로바이더 선택",
-            options=["gemini", "ollama"],
-            index=0 if current_embedding == "gemini" else 1,
-            label_visibility="collapsed",
-            key="embedding_provider_select_unique"
-        )
-        print(f"✅ 임베딩 라디오 선택: {embedding_provider}")
+        st.info(f"🔒 **Ollama로 고정됨**\n- 모델: {OLLAMA_EMBEDDING_MODEL}\n- 차원: {OLLAMA_EMBEDDING_DIM}")
 
-    # 현재 선택 상태 표시
-    st.info(f"📌 현재 선택: LLM={llm_provider} | 임베딩={embedding_provider}")
-    print(f"📌 설정 페이지 최종 선택값: llm_provider={llm_provider}, embedding_provider={embedding_provider}")
+    st.info(f"📌 현재 선택: LLM={llm_provider.upper()} | 임베딩=OLLAMA (고정)")
 
     st.divider()
 
-    # ============ 문서 로드 및 인덱스 생성 ============
-    st.subheader("📄 문서 관리")
+    # ==================== 문서 로드 및 인덱스 생성 ====================
+    st.subheader("📥 문서 로드 및 인덱스 생성")
 
-    if st.button("📥 문서 로드 및 인덱스 생성", use_container_width=True):
-        with st.spinner("처리 중..."):
+    if st.button("📥 문서 로드 및 인덱스 생성", key="load_docs_btn"):
+        print(f"\n{'=' * 60}")
+        print(f"📋 설정 페이지: 문서 로드 시작")
+        print(f"   LLM 프로바이더: {llm_provider}")
+        print(f"   임베딩 프로바이더: ollama (고정)")
+        print(f"{'=' * 60}\n")
+
+        with st.spinner("📖 문서 로드 중..."):
             try:
-                # ✅ 선택된 프로바이더 확인
-                print(f"🔘 버튼 클릭 시점의 프로바이더:")
-                print(f"   llm_provider: {llm_provider}")
-                print(f"   embedding_provider: {embedding_provider}")
-
                 # 1. 문서 로드
-                st.write("📖 문서 로드 중...")
-                loader = DocumentLoader(str(SAMPLE_DATA_PATH))
-                doc_success = loader.load()
+                print("📖 문서 로드 시작...")
+                loader = DocumentLoader(SAMPLE_DATA_PATH)
+                documents = loader.load()
 
-                if not doc_success:
-                    st.error("❌ 문서 로드 실패!")
+                # documents가 bool이면 에러 처리
+                if isinstance(documents, bool):
+                    st.error(f"❌ 문서 로드 실패")
+                    print(f"❌ DocumentLoader.load()가 bool 반환: {documents}")
                     return
 
-                st.success(f"✅ {len(loader.documents)}개 문서 로드 완료")
-                print(f"✅ {len(loader.documents)}개 문서 로드 완료")
+                if not documents or len(documents) == 0:
+                    st.error("❌ 로드된 문서가 없습니다")
+                    print(f"❌ 로드된 문서 없음")
+                    return
 
-                # 2. 청킹
+                st.success(f"✅ {len(documents)}개 문서 로드 완료")
+                print(f"✅ {len(documents)}개 문서 로드 완료\n")
+
+                # 2. 텍스트 청킹
+                print("✂️ 텍스트 청킹 시작...")
                 st.write("✂️ 텍스트 청킹 중...")
                 splitter = TextSplitter()
-                combined = '\n\n'.join(d['content'] for d in loader.documents)
-                chunks = splitter.split(combined)
+                chunks = splitter.split(documents)
 
-                if not chunks:
-                    st.error("❌ 청킹 실패!")
+                if not chunks or len(chunks) == 0:
+                    st.error("❌ 청크 생성 실패")
+                    print(f"❌ 청크 생성 실패")
                     return
 
                 st.success(f"✅ {len(chunks)}개 청크 생성 완료")
-                print(f"✅ {len(chunks)}개 청크 생성 완료")
+                print(f"✅ {len(chunks)}개 청크 생성 완료\n")
 
-                # 3. 임베딩 (선택된 프로바이더 사용)
-                st.write(f"🧠 {embedding_provider.upper()} 임베딩 생성 중...")
-                print(f"🧠 {embedding_provider.upper()} 임베딩 생성 시작")
+                # 3. Ollama 임베딩 생성 (고정)
+                print("🧠 Ollama 임베딩 생성 시작...")
+                st.write("🧠 Ollama 임베딩 생성 중...")
 
-                try:
-                    print(f"🔗 임베딩 API 생성 중: {embedding_provider}")
-                    embedding_api = llm_factory.create_embedding_api(embedding_provider)
+                embedding_api = llm_factory.create_embedding_api(provider="ollama")
+                embeddings_model = embedding_api.get_embeddings()
 
-                    print(f"📦 임베딩 API 타입: {type(embedding_api)}")
-                    print(f"   클래스명: {embedding_api.__class__.__name__}")
+                print(f"📦 임베딩 API 타입: {type(embedding_api).__name__}")
+                print(f"📦 LangChain 임베딩 모델 타입: {type(embeddings_model).__name__}\n")
 
-                    # ✅ 핵심: API 객체가 아닌 LangChain 임베딩 모델 전달
-                    print(f"🔧 LangChain 임베딩 모델 추출 중...")
-                    embeddings_model = embedding_api.get_embeddings()
+                embedder = EmbeddingGenerator(embeddings_model)
+                embeddings = embedder.generate(chunks)
 
-                    print(f"📦 임베딩 모델 타입: {type(embeddings_model)}")
-                    print(f"   클래스명: {embeddings_model.__class__.__name__}")
-
-                    embedder = EmbeddingGenerator(embeddings_model)
-
-                    print(f"🔄 임베딩 생성 시작: {len(chunks)}개 청크")
-                    embeddings = embedder.generate(chunks)
-
-                    # ✅ 임베딩 검증
-                    if embeddings and len(embeddings) > 0:
-                        print(f"✅ 임베딩 생성 완료: {len(embeddings)}개")
-                        print(f"   첫 번째 벡터 차원: {len(embeddings[0])}")
-                        st.success(f"✅ {len(embeddings)}개 임베딩 생성 완료 (차원: {len(embeddings[0])})")
-                    else:
-                        print(f"❌ 임베딩 결과가 비어있음")
-                        st.error("❌ 임베딩 생성 실패 (결과 없음)!")
-                        return
-
-                except AttributeError as e:
-                    print(f"❌ 속성 오류: {e}")
-                    st.error(f"❌ {embedding_provider.upper()} 임베딩 속성 오류: {str(e)}")
-                    import traceback
-                    st.text(traceback.format_exc())
+                if not embeddings or len(embeddings) == 0:
+                    st.error("❌ 임베딩 생성 실패")
+                    print("❌ 임베딩 생성 실패\n")
                     return
 
-                except Exception as e:
-                    print(f"❌ {embedding_provider.upper()} 임베딩 생성 실패: {str(e)}")
-                    st.error(f"❌ {embedding_provider.upper()} 임베딩 생성 실패: {str(e)}")
-                    st.info("💡 팁: Ollama 사용 시 `ollama serve` 실행 확인 후 재시도하세요.")
-                    import traceback
-                    st.text(traceback.format_exc())
-                    return
+                st.success(f"✅ {len(embeddings)}개 임베딩 생성 완료")
+                print(f"✅ {len(embeddings)}개 임베딩 생성 완료\n")
 
-                if not embeddings:
-                    print(f"❌ 최종 임베딩 검증 실패")
-                    st.error("❌ 임베딩 생성 실패!")
-                    return
+                # 4. FAISS 인덱스 생성
+                print("📊 FAISS 인덱스 생성 시작...")
+                st.write("📊 FAISS 인덱스 생성 중...")
 
-                # 4. FAISS 인덱싱
-                st.write("🔍 FAISS 인덱싱 중...")
-                print(f"🔍 FAISS 인덱싱 시작")
+                builder = FAISSIndexBuilder(
+                    dimension=OLLAMA_EMBEDDING_DIM,
+                    index_path=FAISS_INDEX_PATH
+                )
+                builder.build_index(chunks, embeddings)
+                builder.save_index(FAISS_INDEX_PATH)
 
-                indexer = FAISSIndexBuilder()
-                index_success = indexer.build(chunks, embeddings, loader.documents)
+                st.success("✅ FAISS 인덱스 생성 완료!")
+                print(f"✅ FAISS 인덱스 생성 완료\n")
+                print(f"   - 청크: {len(chunks)}개")
+                print(f"   - 임베딩: {len(embeddings)}개")
+                print(f"   - 차원: {OLLAMA_EMBEDDING_DIM}\n")
 
-                if index_success:
-                    state.save_state(
-                        documents_loaded=True,
-                        index_loaded=True,
-                        llm_provider=llm_provider,
-                        embedding_provider=embedding_provider
-                    )
-                    print(f"✅ 상태 저장 완료:")
-                    print(f"   llm_provider: {llm_provider}")
-                    print(f"   embedding_provider: {embedding_provider}")
-                    st.success("✅ 문서 로드 및 인덱스 생성 완료!")
-                else:
-                    print(f"❌ 인덱스 생성 실패")
-                    st.error("❌ 인덱스 생성 실패!")
-                    return
-
+                # 5. 상태 저장
+                print("💾 상태 저장 중...")
+                state.save_state(
+                    documents_loaded=True,
+                    index_loaded=True,
+                    llm_provider=llm_provider,
+                    embedding_provider="ollama",  # 항상 ollama
+                )
+                print(f"✅ 상태 저장 완료\n")
+                st.success("✅ 모든 과정 완료!")
                 st.rerun()
 
             except Exception as e:
-                print(f"❌ 예기치 않은 오류: {str(e)}")
-                st.error(f"❌ 예기치 않은 오류: {str(e)}")
+                print(f"❌ 오류 발생: {str(e)}\n")
                 import traceback
                 print(traceback.format_exc())
-                st.text(traceback.format_exc())
+                st.error(f"❌ 오류: {str(e)}")
+                st.error(f"💡 해결 방법: Ollama 서버 실행 확인\n```\nollama serve\n```")
 
     st.divider()
 
-    # ============ 초기화 ============
-    st.subheader("🗑️ 캐시 및 인덱스 초기화")
+    # ==================== 초기화 ====================
+    st.subheader("🔄 초기화")
 
+    # ==================== 캐시 및 인덱스 초기화 ====================
+    st.write("**문서 및 인덱스:**")
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("🧹 캐시 삭제", use_container_width=True):
+        if st.button("🗑️ 캐시 삭제", key="clear_cache_btn"):
             try:
-                gemini_api = llm_factory.create_embedding_api("gemini")
-                gemini_api.embedding_cache.clear()
-                st.success("✅ Gemini 캐시 삭제 완료")
-                print(f"✅ Gemini 캐시 삭제 완료")
+                cache_path = Path("cache/embeddings.pkl")
+                if cache_path.exists():
+                    cache_path.unlink()
+                    st.success("✅ 캐시 삭제 완료")
+                    print("✅ 캐시 삭제 완료")
+                else:
+                    st.info("ℹ️ 캐시 파일이 없습니다")
             except Exception as e:
-                st.warning(f"⚠️ Gemini 캐시 삭제 중 오류: {str(e)}")
-                print(f"⚠️ Gemini 캐시 삭제 중 오류: {str(e)}")
+                st.error(f"❌ 캐시 삭제 실패: {str(e)}")
 
     with col2:
-        if st.button("🔄 인덱스 초기화", use_container_width=True):
+        if st.button("🔄 인덱스 초기화", key="reset_index_btn"):
             try:
-                from config import FAISS_INDEX_PATH
                 if FAISS_INDEX_PATH.exists():
                     shutil.rmtree(FAISS_INDEX_PATH)
                     st.success("✅ 인덱스 초기화 완료")
-                    print(f"✅ 인덱스 초기화 완료")
-                else:
-                    st.info("ℹ️ 인덱스가 없습니다.")
-                    print(f"ℹ️ 인덱스가 없습니다.")
+                    print("✅ FAISS 인덱스 초기화 완료")
 
-                state.save_state(documents_loaded=False, index_loaded=False)
-                st.rerun()
+                    # 상태 업데이트
+                    state.save_state(
+                        documents_loaded=False,
+                        index_loaded=False,
+                        llm_provider=llm_provider,
+                        embedding_provider="ollama",
+                    )
+                    st.rerun()
+                else:
+                    st.info("ℹ️ 인덱스가 없습니다")
             except Exception as e:
                 st.error(f"❌ 인덱스 초기화 실패: {str(e)}")
-                print(f"❌ 인덱스 초기화 실패: {str(e)}")
 
     st.divider()
 
-    # ============ 상태 정보 ============
+    # ==================== 대화 히스토리 관리 ====================
+    st.write("**대화 히스토리:**")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("📊 통계 보기", key="show_stats_btn"):
+            try:
+                db = ChatDatabase()
+                stats = db.get_statistics()
+
+                if stats:
+                    st.subheader("📊 대화 통계")
+                    st.metric("총 대화 수", stats.get('total_chats', 0))
+
+                    if stats.get('rating_stats'):
+                        st.write("**평가 분포:**")
+                        rating_data = stats.get('rating_stats', {})
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.metric("👍 좋음", rating_data.get(1, 0))
+                        with col_b:
+                            st.metric("😐 보통", rating_data.get(0, 0))
+                        with col_c:
+                            st.metric("👎 나쁨", rating_data.get(-1, 0))
+
+                    if stats.get('category_stats'):
+                        st.write("**카테고리 분포:**")
+                        for category, count in stats.get('category_stats', {}).items():
+                            st.write(f"- {category}: {count}개")
+                else:
+                    st.info("통계 데이터가 없습니다.")
+            except Exception as e:
+                st.error(f"❌ 통계 로드 실패: {str(e)}")
+
+    with col2:
+        if st.button("🗑️ 모든 대화 삭제", key="clear_history_btn"):
+            try:
+                # 확인 메시지
+                st.warning("⚠️ 정말로 모든 대화를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.")
+
+                col_confirm1, col_confirm2 = st.columns(2)
+                with col_confirm1:
+                    if st.button("✅ 확인 - 삭제", key="confirm_delete_history"):
+                        db = ChatDatabase()
+                        db.clear_history()
+                        st.success("✅ 모든 대화가 삭제되었습니다!")
+                        print("✅ 모든 대화 삭제 완료")
+                        import time
+                        time.sleep(1)
+                        st.rerun()
+
+                with col_confirm2:
+                    if st.button("❌ 취소", key="cancel_delete_history"):
+                        st.info("삭제가 취소되었습니다.")
+            except Exception as e:
+                st.error(f"❌ 대화 삭제 실패: {str(e)}")
+
+    st.divider()
+
+    # ==================== 현재 상태 표시 ====================
     st.subheader("📊 현재 상태")
-    current_state = state.load_state()
-    st.json({
-        "문서_로드됨": current_state.get("documents_loaded", False),
-        "인덱스_생성됨": current_state.get("index_loaded", False),
-        "LLM_프로바이더": current_state.get("llm_provider", "ollama"),
-        "임베딩_프로바이더": current_state.get("embedding_provider", "ollama")
-    })
+    import json
+    status_data = {
+        "documents_loaded": current_state.get("documents_loaded", False),
+        "index_loaded": current_state.get("index_loaded", False),
+        "llm_provider": current_state.get("llm_provider", "gemini"),
+        "embedding_provider": "ollama",  # 항상 ollama
+        "embedding_dimension": OLLAMA_EMBEDDING_DIM,
+        "sample_data_path": str(SAMPLE_DATA_PATH),
+        "faiss_index_path": str(FAISS_INDEX_PATH),
+        "database_path": str(DB_PATH),
+    }
+    st.json(status_data)
