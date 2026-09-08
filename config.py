@@ -20,21 +20,29 @@ FAISS_INDEX_PATH = DATA_DIR / "faiss_index"
 EMBEDDING_CACHE_PATH = CACHE_DIR / "embeddings.pkl"
 STATE_FILE_PATH = DATA_DIR / "app_state.json"
 
-# Google Gemini API
+# ==================== Google Gemini API ====================
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-GENERATION_MODEL = "gemini-3.8-flash"
-EMBEDDING_MODEL = "models/gemini-embedding-001"
+GENERATION_MODEL = "gemini-3.6-flash"
+EMBEDDING_MODEL = "models/text-embedding-004"  # 최신 임베딩 모델
 EMBEDDING_TASK = "retrieval_document"
-EMBEDDING_DIM = 3072
+EMBEDDING_DIM = 768  # text-embedding-004는 768차원
 
-# 생성 파라미터
+# ==================== Ollama 로컬 모델 ====================
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_GENERATION_MODEL = "qwen2.5:14b-instruct-q4_0"
+OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
+OLLAMA_EMBEDDING_DIM = 384
+OLLAMA_TIMEOUT = 60
+
+# ==================== 프로바이더 선택 ====================
+LLM_PROVIDER = "gemini"           # "gemini" 또는 "ollama"
+EMBEDDING_PROVIDER = "ollama"     # "gemini" 또는 "ollama"
+
+# ==================== LLM 생성 파라미터 ====================
 TEMPERATURE = 0.3
 MAX_TOKENS = 2000
 NUM_WORKERS = 4
 
-# 데이터베이스
+# ==================== 데이터베이스 설정 ====================
 DATABASE_TIMEOUT = 10
 ENABLE_CACHING = True
-
-# LLM 프로바이더
-LLM_PROVIDER = "gemini"

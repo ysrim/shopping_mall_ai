@@ -34,31 +34,38 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
 
     st.divider()
 
-    # 히스토리
-    chat_history = service.get_history()
+    # 히스토리 로드 (에러 처리 개선)
+    try:
+        chat_history = service.get_history()
 
-    if not chat_history:
-        st.info("아직 대화가 없습니다.")
+        if not chat_history:
+            st.info("아직 대화가 없습니다.")
+        else:
+            st.subheader("📋 대화 히스토리")
+            for chat in chat_history:
+                with st.container(border=True):
+                    st.write(f"**사용자:** {chat.get('user_message', 'N/A')}")
+                    st.write(f"**AI:** {chat.get('assistant_message', 'N/A')}")
 
-    for chat in chat_history:
-        with st.container(border=True):
-            st.write(f"**사용자:** {chat['user_message']}")
-            st.write(f"**AI:** {chat['assistant_message']}")
-
-            if chat['rating'] is not None:
-                rating_emoji = {1: "👍", 0: "😐", -1: "👎"}.get(chat['rating'], "")
-                st.caption(f"평가: {rating_emoji}")
-            else:
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if st.button("👍", key=f"like_{chat['id']}"):
-                        service.rate_message(chat['id'], 1)
-                        st.rerun()
-                with col2:
-                    if st.button("😐", key=f"neutral_{chat['id']}"):
-                        service.rate_message(chat['id'], 0)
-                        st.rerun()
-                with col3:
-                    if st.button("👎", key=f"dislike_{chat['id']}"):
-                        service.rate_message(chat['id'], -1)
-                        st.rerun()
+                    if chat.get('rating') is not None:
+                        rating_emoji = {1: "👍", 0: "😐", -1: "👎"}.get(chat['rating'], "")
+                        st.caption(f"평가: {rating_emoji}")
+                    else:
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            if st.button("👍", key=f"like_{chat['id']}"):
+                                service.rate_message(chat['id'], 1)
+                                st.rerun()
+                        with col2:
+                            if st.button("😐", key=f"neutral_{chat['id']}"):
+                                service.rate_message(chat['id'], 0)
+                                st.rerun()
+                        with col3:
+                            if st.button("👎", key=f"dislike_{chat['id']}"):
+                                service.rate_message(chat['id'], -1)
+                                st.rerun()
+    except KeyError as e:
+        st.error(f"❌ 히스토리 로드 오류: 데이터 형식이 맞지 않습니다 (누락된 필드: {str(e)})")
+        st.info("설정 페이지에서 '히스토리 초기화'를 클릭하고 다시 시도해주세요.")
+    except Exception as e:
+        st.error(f"❌ 히스토리 로드 오류: {str(e)}")
