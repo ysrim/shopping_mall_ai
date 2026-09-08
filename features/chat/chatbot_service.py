@@ -91,109 +91,94 @@ class ChatbotService:
     def _extract_response(self, llm_response) -> str:
         """
         LLM 응답에서 텍스트 추출
-
-        Args:
-            llm_response: LLM이 반환한 응답 (다양한 타입 가능)
-
-        Returns:
-            텍스트 문자열
         """
-        print(f"📦 LLM 응답 타입: {type(llm_response).__name__}")
-        print(f"📦 LLM 응답 값: {repr(llm_response)[:150]}...\n")
+        print(f"\n{'=' * 60}")
+        print(f"📦 LLM 응답 처리 시작")
+        print(f"{'=' * 60}")
+        print(f"응답 타입: {type(llm_response).__name__}")
 
-        # 1. 문자열이면 그대로 반환
+        # 1. 문자열
         if isinstance(llm_response, str):
-            print(f"   → 문자열 타입, 직접 반환")
-            return llm_response
+            print("✅ [방법 1] 문자열 타입 → 직접 반환")
+            result = llm_response.strip()
+            print(f"결과 길이: {len(result)}자\n")
+            return result
 
-        # 2. dict 타입 처리
-        elif isinstance(llm_response, dict):
-            print(f"   → dict 타입 처리 중...")
-
-            # 'text' 키 확인 (Gemini API 형식)
+        # 2. dict 타입
+        if isinstance(llm_response, dict):
             if 'text' in llm_response:
+                print("✅ [방법 2] dict['text'] → 추출")
                 result = str(llm_response['text']).strip()
-                print(f"   → 'text' 키에서 추출: {result[:50]}...")
+                print(f"결과 길이: {len(result)}자\n")
                 return result
 
-            # 'content' 키 확인 (일반 형식)
-            elif 'content' in llm_response:
+            if 'content' in llm_response:
+                print("✅ [방법 3] dict['content'] → 추출")
                 result = str(llm_response['content']).strip()
-                print(f"   → 'content' 키에서 추출: {result[:50]}...")
+                print(f"결과 길이: {len(result)}자\n")
                 return result
 
-            # 'parts' 키 확인 (LangChain 형식)
-            elif 'parts' in llm_response:
-                parts = llm_response['parts']
-                if isinstance(parts, list) and len(parts) > 0:
-                    if isinstance(parts[0], dict) and 'text' in parts[0]:
-                        result = str(parts[0]['text']).strip()
-                        print(f"   → 'parts[0].text'에서 추출: {result[:50]}...")
-                        return result
-                    else:
-                        result = str(parts[0]).strip()
-                        print(f"   → 'parts[0]'에서 추출: {result[:50]}...")
-                        return result
-
-            # 다른 모든 값을 문자열로 변환
-            result = str(llm_response)
-            print(f"   → dict를 문자열로 변환: {result[:50]}...")
-            return result
-
-        # 3. 리스트 타입 처리
-        elif isinstance(llm_response, list):
-            print(f"   → 리스트 타입 처리 중...")
-
-            if len(llm_response) > 0:
-                # 첫 번째 요소가 dict인 경우
-                if isinstance(llm_response[0], dict):
-                    # 'text' 키 확인
-                    if 'text' in llm_response[0]:
-                        result = str(llm_response[0]['text']).strip()
-                        print(f"   → list[0]['text']에서 추출: {result[:50]}...")
-                        return result
-                    # 'content' 키 확인
-                    elif 'content' in llm_response[0]:
-                        result = str(llm_response[0]['content']).strip()
-                        print(f"   → list[0]['content']에서 추출: {result[:50]}...")
-                        return result
-                    else:
-                        result = str(llm_response[0])
-                        print(f"   → list[0]을 문자열로 변환: {result[:50]}...")
-                        return result
-                else:
-                    result = str(llm_response[0]).strip()
-                    print(f"   → list[0]에서 추출: {result[:50]}...")
-                    return result
-            else:
-                print(f"   → 빈 리스트, 오류 메시지 반환")
-                return "응답을 생성할 수 없습니다."
-
-        # 4. 객체 타입 처리 (content 속성 확인)
-        elif hasattr(llm_response, 'content'):
-            print(f"   → content 속성이 있는 객체")
+        # 3. 객체의 content 속성 (AIMessage 등)
+        if hasattr(llm_response, 'content'):
+            print(f"✅ [방법 4] content 속성 찾음")
             content = llm_response.content
+            print(f"   content 타입: {type(content).__name__}")
 
-            # content가 리스트인 경우
+            # content가 리스트인 경우 (AIMessage)
             if isinstance(content, list):
+                print(f"   content는 리스트, 길이: {len(content)}")
                 if len(content) > 0:
-                    result = str(content[0]).strip()
-                    print(f"   → content[0]에서 추출: {result[:50]}...")
+                    first_item = content[0]
+                    print(f"   첫 번째 항목 타입: {type(first_item).__name__}")
+
+                    # 첫 번째 항목이 dict인 경우
+                    if isinstance(first_item, dict):
+                        if 'text' in first_item:
+                            print("   ✅ first_item['text'] 추출")
+                            result = str(first_item['text']).strip()
+                            print(f"   결과 길이: {len(result)}자\n")
+                            return result
+                        elif 'content' in first_item:
+                            print("   ✅ first_item['content'] 추출")
+                            result = str(first_item['content']).strip()
+                            print(f"   결과 길이: {len(result)}자\n")
+                            return result
+
+                    # 첫 번째 항목이 문자열인 경우
+                    print("   ✅ first_item을 문자열로 변환")
+                    result = str(first_item).strip()
+                    print(f"   결과 길이: {len(result)}자\n")
                     return result
-                else:
-                    print(f"   → content가 빈 리스트")
-                    return "응답을 생성할 수 없습니다."
-            else:
-                result = str(content).strip()
-                print(f"   → content에서 추출: {result[:50]}...")
+
+            # content가 문자열인 경우
+            elif isinstance(content, str):
+                print("✅ [방법 5] content는 문자열")
+                result = content.strip()
+                print(f"결과 길이: {len(result)}자\n")
                 return result
 
-        # 5. 기타 타입 (최후의 수단)
-        else:
-            print(f"   → 기타 타입, str() 변환")
-            result = str(llm_response).strip()
-            print(f"   → 변환 결과: {result[:50]}...")
-            return result
+        # 4. 리스트 타입
+        if isinstance(llm_response, list):
+            print(f"✅ [방법 6] 리스트 타입")
+            if len(llm_response) > 0:
+                first = llm_response[0]
+
+                if isinstance(first, dict) and 'text' in first:
+                    print("   ✅ list[0]['text'] 추출")
+                    result = str(first['text']).strip()
+                    print(f"   결과 길이: {len(result)}자\n")
+                    return result
+
+                print("   ✅ list[0]을 문자열로 변환")
+                result = str(first).strip()
+                print(f"   결과 길이: {len(result)}자\n")
+                return result
+
+        # 최후의 수단
+        print(f"⚠️ [방법 7] str() 변환")
+        result = str(llm_response).strip()
+        print(f"결과 길이: {len(result)}자\n")
+        return result
 
     def process_message(self, user_message: str) -> str:
         """

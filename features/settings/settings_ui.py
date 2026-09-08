@@ -15,6 +15,7 @@ from config import (
     DB_PATH,
 )
 import shutil
+import time
 
 
 def show():
@@ -236,29 +237,46 @@ def show():
                     st.info("통계 데이터가 없습니다.")
             except Exception as e:
                 st.error(f"❌ 통계 로드 실패: {str(e)}")
+                print(f"❌ 통계 로드 오류: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
 
     with col2:
-        if st.button("🗑️ 모든 대화 삭제", key="clear_history_btn"):
-            try:
-                # 확인 메시지
-                st.warning("⚠️ 정말로 모든 대화를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.")
+        if st.button("🗑️ 모든 대화 삭제", key="clear_history_btn_main"):
+            # 확인 메시지
+            st.warning("⚠️ 정말로 모든 대화를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.")
 
-                col_confirm1, col_confirm2 = st.columns(2)
-                with col_confirm1:
-                    if st.button("✅ 확인 - 삭제", key="confirm_delete_history"):
+            col_confirm1, col_confirm2 = st.columns(2)
+            with col_confirm1:
+                if st.button("✅ 확인 - 삭제", key="confirm_delete_history_main"):
+                    try:
+                        print("\n" + "=" * 60)
+                        print("🗑️ 모든 대화 삭제 시작")
+                        print("=" * 60 + "\n")
+
                         db = ChatDatabase()
-                        db.clear_history()
-                        st.success("✅ 모든 대화가 삭제되었습니다!")
-                        print("✅ 모든 대화 삭제 완료")
-                        import time
-                        time.sleep(1)
-                        st.rerun()
+                        print("📊 데이터베이스 연결 완료")
 
-                with col_confirm2:
-                    if st.button("❌ 취소", key="cancel_delete_history"):
-                        st.info("삭제가 취소되었습니다.")
-            except Exception as e:
-                st.error(f"❌ 대화 삭제 실패: {str(e)}")
+                        success = db.clear_history()
+                        print(f"삭제 결과: {success}")
+
+                        if success:
+                            st.success("✅ 모든 대화가 삭제되었습니다!")
+                            print("✅ 모든 대화 삭제 완료\n")
+                            time.sleep(1.5)
+                            st.rerun()
+                        else:
+                            st.error("❌ 대화 삭제 실패")
+                            print("❌ 대화 삭제 실패\n")
+                    except Exception as e:
+                        print(f"\n❌ 대화 삭제 오류: {str(e)}")
+                        import traceback
+                        print(traceback.format_exc())
+                        st.error(f"❌ 대화 삭제 실패: {str(e)}")
+
+            with col_confirm2:
+                if st.button("❌ 취소", key="cancel_delete_history_main"):
+                    st.info("삭제가 취소되었습니다.")
 
     st.divider()
 

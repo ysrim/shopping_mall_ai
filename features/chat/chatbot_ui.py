@@ -20,10 +20,72 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
         st.warning("⚠️ 먼저 설정 페이지에서 문서를 로드하고 인덱스를 생성해주세요.")
         st.stop()
 
-    # ==================== 사용자 입력 ====================
+    # ==================== 대화 히스토리 (맨 위) ====================
     print("\n" + "=" * 60)
     print("📄 채팅 페이지 진입")
     print("=" * 60 + "\n")
+
+    st.subheader("📋 대화 히스토리 (최신순)")
+
+    try:
+        print("\n📋 히스토리 로드 중...")
+        chat_history = service.get_history()
+
+        if chat_history:
+            print(f"✅ 히스토리 로드 완료: {len(chat_history)}개\n")
+
+            # 역순으로 정렬 (최신이 맨 위)
+            chat_history = list(reversed(chat_history))
+
+            for chat in chat_history:
+                with st.container(border=True):
+                    # 대화 내용 표시
+                    col1, col2 = st.columns([9, 1])
+
+                    with col1:
+                        st.write(f"**👤 사용자:** {chat.get('user_message', 'N/A')}")
+                        st.write(f"**🤖 AI:** {chat.get('assistant_message', 'N/A')}")
+
+                    with col2:
+                        # 삭제 버튼
+                        if st.button("🗑️", key=f"delete_{chat['id']}", help="대화 삭제"):
+                            service.delete_message(chat['id'])
+                            st.info("삭제되었습니다.")
+                            time.sleep(0.5)
+                            st.rerun()
+
+                    # 평가 표시
+                    if chat.get('rating') is not None:
+                        rating_emoji = {1: "👍", 0: "😐", -1: "👎"}.get(chat['rating'], "")
+                        st.caption(f"평가: {rating_emoji}")
+                    else:
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            if st.button("👍", key=f"like_{chat['id']}"):
+                                service.rate_message(chat['id'], 1)
+                                st.rerun()
+                        with col2:
+                            if st.button("😐", key=f"neutral_{chat['id']}"):
+                                service.rate_message(chat['id'], 0)
+                                st.rerun()
+                        with col3:
+                            if st.button("👎", key=f"dislike_{chat['id']}"):
+                                service.rate_message(chat['id'], -1)
+                                st.rerun()
+        else:
+            st.info("아직 대화가 없습니다.")
+            print("ℹ️ 대화 히스토리가 비어있습니다")
+
+    except Exception as e:
+        print(f"❌ 히스토리 로드 오류: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        st.warning(f"⚠️ 히스토리 로드 중 오류 발생: {str(e)}")
+
+    st.divider()
+
+    # ==================== 사용자 입력 및 답변 (맨 아래) ====================
+    st.subheader("💬 새로운 질문")
 
     user_input = st.chat_input("질문을 입력하세요...")
 
@@ -94,59 +156,3 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
                     st.warning("👎 평가가 저장되었습니다!")
                     time.sleep(1)
                     st.rerun()
-
-    st.divider()
-
-    # ==================== 대화 히스토리 ====================
-    try:
-        print("\n📋 히스토리 로드 중...")
-        chat_history = service.get_history()
-
-        if not chat_history:
-            st.info("아직 대화가 없습니다.")
-            print("ℹ️ 대화 히스토리가 비어있습니다")
-        else:
-            st.subheader("📋 대화 히스토리")
-            print(f"✅ 히스토리 로드 완료: {len(chat_history)}개\n")
-
-            for chat in chat_history:
-                with st.container(border=True):
-                    # 대화 내용 표시
-                    col1, col2 = st.columns([9, 1])
-
-                    with col1:
-                        st.write(f"**👤 사용자:** {chat.get('user_message', 'N/A')}")
-                        st.write(f"**🤖 AI:** {chat.get('assistant_message', 'N/A')}")
-
-                    with col2:
-                        # 삭제 버튼
-                        if st.button("🗑️", key=f"delete_{chat['id']}", help="대화 삭제"):
-                            service.delete_message(chat['id'])
-                            st.info("삭제되었습니다.")
-                            time.sleep(0.5)
-                            st.rerun()
-
-                    # 평가 표시
-                    if chat.get('rating') is not None:
-                        rating_emoji = {1: "👍", 0: "😐", -1: "👎"}.get(chat['rating'], "")
-                        st.caption(f"평가: {rating_emoji}")
-                    else:
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            if st.button("👍", key=f"like_{chat['id']}"):
-                                service.rate_message(chat['id'], 1)
-                                st.rerun()
-                        with col2:
-                            if st.button("😐", key=f"neutral_{chat['id']}"):
-                                service.rate_message(chat['id'], 0)
-                                st.rerun()
-                        with col3:
-                            if st.button("👎", key=f"dislike_{chat['id']}"):
-                                service.rate_message(chat['id'], -1)
-                                st.rerun()
-
-    except Exception as e:
-        print(f"❌ 히스토리 로드 오류: {str(e)}")
-        import traceback
-        print(traceback.format_exc())
-        st.warning(f"⚠️ 히스토리 로드 중 오류 발생: {str(e)}")
