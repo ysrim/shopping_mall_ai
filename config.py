@@ -23,9 +23,9 @@ STATE_FILE_PATH = DATA_DIR / "app_state.json"
 # ==================== Google Gemini API ====================
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 GENERATION_MODEL = "gemini-3.5-flash-lite"
-EMBEDDING_MODEL = "gemini-embedding-001"  # 또는 "gemini-embedding-001"
+EMBEDDING_MODEL = "gemini-embedding-2"  # ✅ 반드시 이것! (gemini-embedding-001 아님)
 EMBEDDING_TASK = "retrieval_document"
-EMBEDDING_DIM = 768  # embedding-001은 768차원 (또는 1536, 3072 가능)
+EMBEDDING_DIM = 3072  # ✅ embedding-001은 768차원
 
 # ==================== Ollama 로컬 모델 ====================
 OLLAMA_BASE_URL = "http://localhost:11434"
@@ -36,7 +36,7 @@ OLLAMA_TIMEOUT = 60
 
 # ==================== 프로바이더 선택 ====================
 LLM_PROVIDER = "gemini"           # "gemini" 또는 "ollama"
-EMBEDDING_PROVIDER = "ollama"     # "gemini" 또는 "ollama"
+EMBEDDING_PROVIDER = "gemini"     # ✅ "gemini" 또는 "ollama"
 
 # ==================== LLM 생성 파라미터 ====================
 TEMPERATURE = 0.3
