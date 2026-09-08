@@ -57,6 +57,7 @@ def show():
                     return
 
                 st.success(f"✅ {len(loader.documents)}개 문서 로드 완료")
+                print(f"✅ {len(loader.documents)}개 문서 로드 완료")
 
                 # 2. 청킹
                 st.write("✂️ 텍스트 청킹 중...")
@@ -69,18 +70,50 @@ def show():
                     return
 
                 st.success(f"✅ {len(chunks)}개 청크 생성 완료")
+                print(f"✅ {len(chunks)}개 청크 생성 완료")
 
                 # 3. 임베딩 (선택된 프로바이더 사용)
                 st.write(f"🧠 {embedding_provider.upper()} 임베딩 생성 중...")
+                print(f"🧠 {embedding_provider.upper()} 임베딩 생성 시작")
 
-                # 선택된 프로바이더에 맞는 임베딩 API 생성
                 try:
+                    print(f"🔗 임베딩 API 생성 중: {embedding_provider}")
                     embedding_api = llm_factory.create_embedding_api(embedding_provider)
-                    # ✅ 핵심 수정: API 객체가 아닌 LangChain 임베딩 모델 전달
+
+                    print(f"📦 임베딩 API 타입: {type(embedding_api)}")
+                    print(f"   클래스명: {embedding_api.__class__.__name__}")
+
+                    # ✅ 핵심: API 객체가 아닌 LangChain 임베딩 모델 전달
+                    print(f"🔧 LangChain 임베딩 모델 추출 중...")
                     embeddings_model = embedding_api.get_embeddings()
+
+                    print(f"📦 임베딩 모델 타입: {type(embeddings_model)}")
+                    print(f"   클래스명: {embeddings_model.__class__.__name__}")
+
                     embedder = EmbeddingGenerator(embeddings_model)
+
+                    print(f"🔄 임베딩 생성 시작: {len(chunks)}개 청크")
                     embeddings = embedder.generate(chunks)
+
+                    # ✅ 임베딩 검증
+                    if embeddings and len(embeddings) > 0:
+                        print(f"✅ 임베딩 생성 완료: {len(embeddings)}개")
+                        print(f"   첫 번째 벡터 차원: {len(embeddings[0])}")
+                        st.success(f"✅ {len(embeddings)}개 임베딩 생성 완료 (차원: {len(embeddings[0])})")
+                    else:
+                        print(f"❌ 임베딩 결과가 비어있음")
+                        st.error("❌ 임베딩 생성 실패 (결과 없음)!")
+                        return
+
+                except AttributeError as e:
+                    print(f"❌ 속성 오류: {e}")
+                    st.error(f"❌ {embedding_provider.upper()} 임베딩 속성 오류: {str(e)}")
+                    import traceback
+                    st.text(traceback.format_exc())
+                    return
+
                 except Exception as e:
+                    print(f"❌ {embedding_provider.upper()} 임베딩 생성 실패: {str(e)}")
                     st.error(f"❌ {embedding_provider.upper()} 임베딩 생성 실패: {str(e)}")
                     st.info("💡 팁: Ollama 사용 시 `ollama serve` 실행 확인 후 재시도하세요.")
                     import traceback
@@ -88,13 +121,14 @@ def show():
                     return
 
                 if not embeddings:
+                    print(f"❌ 최종 임베딩 검증 실패")
                     st.error("❌ 임베딩 생성 실패!")
                     return
 
-                st.success(f"✅ {len(embeddings)}개 임베딩 생성 완료")
-
                 # 4. FAISS 인덱싱
                 st.write("🔍 FAISS 인덱싱 중...")
+                print(f"🔍 FAISS 인덱싱 시작")
+
                 indexer = FAISSIndexBuilder()
                 index_success = indexer.build(chunks, embeddings, loader.documents)
 
@@ -105,16 +139,20 @@ def show():
                         llm_provider=llm_provider,
                         embedding_provider=embedding_provider
                     )
+                    print(f"✅ 상태 저장 완료")
                     st.success("✅ 문서 로드 및 인덱스 생성 완료!")
                 else:
+                    print(f"❌ 인덱스 생성 실패")
                     st.error("❌ 인덱스 생성 실패!")
                     return
 
                 st.rerun()
 
             except Exception as e:
+                print(f"❌ 예기치 않은 오류: {str(e)}")
                 st.error(f"❌ 예기치 않은 오류: {str(e)}")
                 import traceback
+                print(traceback.format_exc())
                 st.text(traceback.format_exc())
 
     st.divider()
@@ -130,8 +168,10 @@ def show():
                 gemini_api = llm_factory.create_embedding_api("gemini")
                 gemini_api.embedding_cache.clear()
                 st.success("✅ Gemini 캐시 삭제 완료")
+                print(f"✅ Gemini 캐시 삭제 완료")
             except Exception as e:
                 st.warning(f"⚠️ Gemini 캐시 삭제 중 오류: {str(e)}")
+                print(f"⚠️ Gemini 캐시 삭제 중 오류: {str(e)}")
 
     with col2:
         if st.button("🔄 인덱스 초기화", use_container_width=True):
@@ -140,13 +180,16 @@ def show():
                 if FAISS_INDEX_PATH.exists():
                     shutil.rmtree(FAISS_INDEX_PATH)
                     st.success("✅ 인덱스 초기화 완료")
+                    print(f"✅ 인덱스 초기화 완료")
                 else:
                     st.info("ℹ️ 인덱스가 없습니다.")
+                    print(f"ℹ️ 인덱스가 없습니다.")
 
                 state.save_state(documents_loaded=False, index_loaded=False)
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 인덱스 초기화 실패: {str(e)}")
+                print(f"❌ 인덱스 초기화 실패: {str(e)}")
 
     st.divider()
 

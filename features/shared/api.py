@@ -79,7 +79,6 @@ class GeminiAPI:
             self.llm = ChatGoogleGenerativeAI(
                 model=GENERATION_MODEL,
                 api_key=GOOGLE_API_KEY,
-                temperature=TEMPERATURE,
                 max_tokens=MAX_TOKENS,
                 convert_system_message_to_human=True
             )

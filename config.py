@@ -22,10 +22,10 @@ STATE_FILE_PATH = DATA_DIR / "app_state.json"
 
 # ==================== Google Gemini API ====================
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-GENERATION_MODEL = "gemini-3.6-flash"
-EMBEDDING_MODEL = "models/text-embedding-004"  # 최신 임베딩 모델
+GENERATION_MODEL = "gemini-3.5-flash-lite"
+EMBEDDING_MODEL = "gemini-embedding-001"  # 또는 "gemini-embedding-001"
 EMBEDDING_TASK = "retrieval_document"
-EMBEDDING_DIM = 768  # text-embedding-004는 768차원
+EMBEDDING_DIM = 768  # embedding-001은 768차원 (또는 1536, 3072 가능)
 
 # ==================== Ollama 로컬 모델 ====================
 OLLAMA_BASE_URL = "http://localhost:11434"
