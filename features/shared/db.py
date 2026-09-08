@@ -1,280 +1,239 @@
 import sqlite3
 from pathlib import Path
-from typing import List, Dict, Optional
-from config import DB_PATH
 import threading
+from datetime import datetime
+
+DB_PATH = Path("data/chat.db")
+
+_thread_local = threading.local()
+
+
+def _get_connection():
+    if not hasattr(_thread_local, 'connection') or _thread_local.connection is None:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        _thread_local.connection = conn
+    return _thread_local.connection
+
 
 class ChatDatabase:
-    # 스레드별 연결 저장
-    _thread_local = threading.local()
-
     def __init__(self):
-        """데이터베이스 초기화"""
-        self.db_path = Path(DB_PATH)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        print(f"📊 ChatDatabase 초기화: {self.db_path}")
-        self._init_db()
+        self.conn = _get_connection()
+        self._create_tables()
+        print("✅ ChatDatabase 초기화 완료")
 
-    def _get_connection(self):
-        """스레드별 데이터베이스 연결 획득"""
-        if not hasattr(self._thread_local, 'connection'):
-            self._thread_local.connection = sqlite3.connect(
-                str(self.db_path),
-                check_same_thread=False,  # 스레드 체크 비활성화
-                timeout=10.0
-            )
-            self._thread_local.connection.row_factory = sqlite3.Row
-        return self._thread_local.connection
-
-    def _init_db(self):
-        """데이터베이스 테이블 생성"""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
+    def _create_tables(self):
+        cursor = self.conn.cursor()
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS chats (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_message TEXT NOT NULL,
-                assistant_message TEXT NOT NULL,
-                category TEXT,
-                rating INTEGER DEFAULT NULL,
-                llm_provider TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+                       CREATE TABLE IF NOT EXISTS chats
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           user_message
+                           TEXT
+                           NOT
+                           NULL,
+                           assistant_message
+                           TEXT
+                           NOT
+                           NULL,
+                           category
+                           TEXT,
+                           rating
+                           INTEGER
+                           DEFAULT
+                           0,
+                           llm_provider
+                           TEXT,
+                           timestamp
+                           DATETIME
+                           DEFAULT
+                           CURRENT_TIMESTAMP
+                       )
+                       ''')
+        self.conn.commit()
+        print("✅ 테이블 생성 완료")
 
-        conn.commit()
-        print("✅ 데이터베이스 테이블 생성 완료")
-
-    def save_chat(self, user_message: str, assistant_message: str,
-                  category: str = None, llm_provider: str = None) -> int:
-        """
-        대화 저장
-
-        Args:
-            user_message: 사용자 메시지
-            assistant_message: 어시스턴트 응답
-            category: 카테고리 (선택)
-            llm_provider: LLM 프로바이더 (선택)
-
-        Returns:
-            저장된 대화의 ID
-        """
+    def save_chat(self, user_message: str, assistant_message: str, category: str = None,
+                  llm_provider: str = None) -> int:
+        """대화를 저장합니다."""
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-
+            cursor = self.conn.cursor()
             cursor.execute('''
-                INSERT INTO chats (user_message, assistant_message, category, llm_provider)
-                VALUES (?, ?, ?, ?)
-            ''', (user_message, assistant_message, category, llm_provider))
-
-            conn.commit()
+                           INSERT INTO chats (user_message, assistant_message, category, llm_provider)
+                           VALUES (?, ?, ?, ?)
+                           ''', (user_message, assistant_message, category, llm_provider))
+            self.conn.commit()
             chat_id = cursor.lastrowid
-
-            print(f"✅ 채팅 저장 완료 (ID: {chat_id})")
+            print(f"✅ 대화 저장: ID={chat_id}, 카테고리={category}")
             return chat_id
-
         except Exception as e:
-            print(f"❌ 채팅 저장 실패: {str(e)}")
+            print(f"❌ 대화 저장 실패: {e}")
             raise
 
-    def get_history(self, limit: int = 50) -> List[Dict]:
-        """
-        대화 히스토리 조회
-
-        Args:
-            limit: 조회 개수 (기본: 50)
-
-        Returns:
-            대화 리스트
-        """
+    def get_history(self, limit: int = 50):
+        """대화 이력을 조회합니다 (최신순)."""
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-
+            cursor = self.conn.cursor()
             cursor.execute('''
-                SELECT id, user_message, assistant_message, category, rating, llm_provider, timestamp
-                FROM chats
-                ORDER BY timestamp DESC
-                LIMIT ?
-            ''', (limit,))
-
-            rows = cursor.fetchall()
-
-            # Row를 dict로 변환
-            chats = []
-            for row in rows:
-                chat = {
-                    'id': row['id'],
-                    'user_message': row['user_message'],
-                    'assistant_message': row['assistant_message'],
-                    'category': row['category'],
-                    'rating': row['rating'],
-                    'llm_provider': row['llm_provider'],
-                    'timestamp': row['timestamp']
-                }
-                chats.append(chat)
-
-            print(f"✅ 히스토리 조회 완료: {len(chats)}개")
-            return chats
-
+                           SELECT id, user_message, assistant_message, category, rating, llm_provider, timestamp
+                           FROM chats
+                           ORDER BY timestamp DESC
+                               LIMIT ?
+                           ''', (limit,))
+            results = [dict(row) for row in cursor.fetchall()]
+            print(f"✅ 대화 이력 조회: {len(results)}개")
+            return results
         except Exception as e:
-            print(f"❌ 히스토리 조회 실패: {str(e)}")
+            print(f"❌ 대화 이력 조회 실패: {e}")
             return []
 
     def rate_message(self, chat_id: int, rating: int) -> bool:
-        """
-        대화에 평가 추가
-
-        Args:
-            chat_id: 대화 ID
-            rating: 평가 (1: 좋음, 0: 중간, -1: 나쁨)
-
-        Returns:
-            성공 여부
-        """
+        """대화에 평가를 저장합니다."""
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-
-            cursor.execute('''
-                UPDATE chats SET rating = ? WHERE id = ?
-            ''', (rating, chat_id))
-
-            conn.commit()
-            print(f"✅ 평가 저장 완료 (ID: {chat_id}, 평가: {rating})")
+            cursor = self.conn.cursor()
+            cursor.execute('UPDATE chats SET rating = ? WHERE id = ?', (rating, chat_id))
+            self.conn.commit()
+            print(f"✅ 평가 저장: ID={chat_id}, 평가={rating}")
             return True
-
         except Exception as e:
-            print(f"❌ 평가 저장 실패: {str(e)}")
-            return False
-
-    def update_category(self, chat_id: int, category: str) -> bool:
-        """
-        대화 카테고리 업데이트
-
-        Args:
-            chat_id: 대화 ID
-            category: 새로운 카테고리
-
-        Returns:
-            성공 여부
-        """
-        try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-
-            cursor.execute('''
-                UPDATE chats SET category = ? WHERE id = ?
-            ''', (category, chat_id))
-
-            conn.commit()
-            print(f"✅ 카테고리 업데이트 완료 (ID: {chat_id}, 카테고리: {category})")
-            return True
-
-        except Exception as e:
-            print(f"❌ 카테고리 업데이트 실패: {str(e)}")
+            print(f"❌ 평가 저장 실패: {e}")
             return False
 
     def delete_chat(self, chat_id: int) -> bool:
-        """
-        대화 삭제
-
-        Args:
-            chat_id: 대화 ID
-
-        Returns:
-            성공 여부
-        """
+        """특정 대화를 삭제합니다."""
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-
+            cursor = self.conn.cursor()
             cursor.execute('DELETE FROM chats WHERE id = ?', (chat_id,))
-            conn.commit()
-
-            print(f"✅ 대화 삭제 완료 (ID: {chat_id})")
+            self.conn.commit()
+            print(f"✅ 대화 삭제: ID={chat_id}")
             return True
-
         except Exception as e:
-            print(f"❌ 대화 삭제 실패: {str(e)}")
+            print(f"❌ 대화 삭제 실패: {e}")
             return False
 
     def clear_history(self) -> bool:
-        """
-        모든 대화 삭제
-
-        Returns:
-            성공 여부
-        """
+        """모든 대화를 삭제합니다."""
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-
+            cursor = self.conn.cursor()
             cursor.execute('DELETE FROM chats')
-            conn.commit()
-
-            print(f"✅ 모든 대화 삭제 완료")
+            self.conn.commit()
+            print("✅ 모든 대화 삭제 완료")
             return True
-
         except Exception as e:
-            print(f"❌ 대화 삭제 실패: {str(e)}")
+            print(f"❌ 모든 대화 삭제 실패: {e}")
             return False
 
-    def get_statistics(self) -> Dict:
-        """
-        대화 통계 조회
-
-        Returns:
-            통계 정보
-        """
+    def get_statistics(self):
+        """전체 통계를 반환합니다."""
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
+            cursor = self.conn.cursor()
 
-            # 총 대화 수
-            cursor.execute('SELECT COUNT(*) as count FROM chats')
-            total_count = cursor.fetchone()['count']
+            cursor.execute('SELECT COUNT(*) as total FROM chats')
+            total = cursor.fetchone()['total']
 
-            # 평가별 통계
-            cursor.execute('''
-                SELECT rating, COUNT(*) as count 
-                FROM chats 
-                WHERE rating IS NOT NULL
-                GROUP BY rating
-            ''')
-            rating_stats = {}
-            for row in cursor.fetchall():
-                rating_stats[row['rating']] = row['count']
+            cursor.execute('SELECT COUNT(*) as rated FROM chats WHERE rating != 0')
+            rated = cursor.fetchone()['rated']
 
-            # 카테고리별 통계
-            cursor.execute('''
-                SELECT category, COUNT(*) as count
-                FROM chats
-                WHERE category IS NOT NULL
-                GROUP BY category
-            ''')
-            category_stats = {}
-            for row in cursor.fetchall():
-                category_stats[row['category']] = row['count']
+            cursor.execute('SELECT COUNT(*) as positive FROM chats WHERE rating = 1')
+            positive = cursor.fetchone()['positive']
+
+            cursor.execute('SELECT COUNT(*) as neutral FROM chats WHERE rating = 0')
+            neutral = cursor.fetchone()['neutral']
+
+            cursor.execute('SELECT COUNT(*) as negative FROM chats WHERE rating = -1')
+            negative = cursor.fetchone()['negative']
+
+            print(f"✅ 통계 조회: 총 {total}개, 평가됨 {rated}개")
 
             return {
-                'total_chats': total_count,
-                'rating_stats': rating_stats,
-                'category_stats': category_stats
+                'total_chats': total,
+                'total_rated': rated,
+                'positive_count': positive,
+                'neutral_count': neutral,
+                'negative_count': negative,
+            }
+        except Exception as e:
+            print(f"❌ 통계 조회 실패: {e}")
+            return {
+                'total_chats': 0,
+                'total_rated': 0,
+                'positive_count': 0,
+                'neutral_count': 0,
+                'negative_count': 0,
             }
 
+    def get_top_questions(self, limit: int = 10):
+        """
+        자주 받는 질문 TOP N을 반환합니다.
+        같은 질문이 여러 번 나온 경우를 카운트합니다.
+        """
+        try:
+            cursor = self.conn.cursor()
+
+            cursor.execute('''
+                           SELECT user_message,
+                                  category,
+                                  COUNT(*) as count,
+                    COALESCE(AVG(CASE WHEN rating = 1 THEN 1 WHEN rating = -1 THEN 0 WHEN rating = 0 THEN 0.5 END), 0.5) as avg_satisfaction,
+                    MIN(timestamp) as first_asked,
+                    MAX(timestamp) as last_asked
+                           FROM chats
+                           GROUP BY user_message
+                           ORDER BY count DESC, avg_satisfaction DESC
+                               LIMIT ?
+                           ''', (limit,))
+
+            results = [dict(row) for row in cursor.fetchall()]
+            print(f"✅ TOP {limit} 질문 조회 완료 (총 {len(results)}개)")
+
+            # 결과 검증 및 로그
+            for idx, r in enumerate(results, 1):
+                if r['avg_satisfaction'] is None:
+                    r['avg_satisfaction'] = 0.5
+                print(f"  #{idx}. {r['user_message'][:50]} | 횟수: {r['count']}, 만족도: {r['avg_satisfaction']:.2f}")
+
+            return results
         except Exception as e:
-            print(f"❌ 통계 조회 실패: {str(e)}")
-            return {}
+            print(f"❌ TOP 질문 조회 실패: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return []
+
+    def get_category_stats(self):
+        """
+        카테고리별 질문 수, 만족도를 반환합니다.
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                           SELECT category,
+                                  COUNT(*)                                              as total,
+                                  SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END)           as positive,
+                                  SUM(CASE WHEN rating = -1 THEN 1 ELSE 0 END)          as negative,
+                                  ROUND(AVG(CASE
+                                                WHEN rating = 1 THEN 1
+                                                WHEN rating = -1 THEN 0
+                                                WHEN rating = 0 THEN 0.5 END) * 100, 1) as satisfaction_rate
+                           FROM chats
+                           WHERE category IS NOT NULL
+                           GROUP BY category
+                           ORDER BY total DESC
+                           ''')
+
+            results = [dict(row) for row in cursor.fetchall()]
+            print(f"✅ 카테고리 통계 조회 완료 (총 {len(results)}개 카테고리)")
+            return results
+        except Exception as e:
+            print(f"❌ 카테고리 통계 조회 실패: {e}")
+            return []
 
     def close(self):
-        """데이터베이스 연결 종료"""
-        if hasattr(self._thread_local, 'connection'):
-            try:
-                self._thread_local.connection.close()
-                delattr(self._thread_local, 'connection')
-                print("✅ 데이터베이스 연결 종료")
-            except Exception as e:
-                print(f"⚠️ 연결 종료 실패: {str(e)}")
+        """데이터베이스 연결을 종료합니다."""
+        if hasattr(_thread_local, 'connection') and _thread_local.connection:
+            _thread_local.connection.close()
+            print("✅ 데이터베이스 연결 종료")

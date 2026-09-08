@@ -19,7 +19,7 @@ class ChatbotService:
         self.db = db
         self.llm_provider = llm_provider or LLM_PROVIDER
         self.llm = None
-        self.top_k = 2  # 검색 결과 상위 K개
+        self.top_k = 5  # 검색 결과 상위 K개
 
         print(f"🔗 ChatbotService 초기화")
         print(f"   - LLM 프로바이더: {self.llm_provider}")
