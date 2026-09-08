@@ -14,6 +14,15 @@ def show():
     # ============ LLM 및 임베딩 프로바이더 선택 ============
     st.subheader("🤖 모델 선택")
 
+    # ✅ 현재 상태 로드
+    current_state = state.load_state()
+    current_llm = current_state.get("llm_provider", "ollama")  # ✅ 기본값: ollama
+    current_embedding = current_state.get("embedding_provider", "ollama")  # ✅ 기본값: ollama
+
+    print(f"📊 settings_ui 로드됨")
+    print(f"   현재 저장된 LLM: {current_llm}")
+    print(f"   현재 저장된 임베딩: {current_embedding}")
+
     col1, col2 = st.columns(2)
 
     with col1:
@@ -21,23 +30,26 @@ def show():
         llm_provider = st.radio(
             "LLM 프로바이더 선택",
             options=["gemini", "ollama"],
+            index=0 if current_llm == "gemini" else 1,
             label_visibility="collapsed",
-            key="llm_provider_select"
+            key="llm_provider_select_unique"
         )
-        st.session_state.llm_provider = llm_provider
+        print(f"✅ LLM 라디오 선택: {llm_provider}")
 
     with col2:
         st.write("**임베딩 모델:**")
         embedding_provider = st.radio(
             "임베딩 프로바이더 선택",
             options=["gemini", "ollama"],
+            index=0 if current_embedding == "gemini" else 1,
             label_visibility="collapsed",
-            key="embedding_provider_select"
+            key="embedding_provider_select_unique"
         )
-        st.session_state.embedding_provider = embedding_provider
+        print(f"✅ 임베딩 라디오 선택: {embedding_provider}")
 
     # 현재 선택 상태 표시
     st.info(f"📌 현재 선택: LLM={llm_provider} | 임베딩={embedding_provider}")
+    print(f"📌 설정 페이지 최종 선택값: llm_provider={llm_provider}, embedding_provider={embedding_provider}")
 
     st.divider()
 
@@ -47,6 +59,11 @@ def show():
     if st.button("📥 문서 로드 및 인덱스 생성", use_container_width=True):
         with st.spinner("처리 중..."):
             try:
+                # ✅ 선택된 프로바이더 확인
+                print(f"🔘 버튼 클릭 시점의 프로바이더:")
+                print(f"   llm_provider: {llm_provider}")
+                print(f"   embedding_provider: {embedding_provider}")
+
                 # 1. 문서 로드
                 st.write("📖 문서 로드 중...")
                 loader = DocumentLoader(str(SAMPLE_DATA_PATH))
@@ -139,7 +156,9 @@ def show():
                         llm_provider=llm_provider,
                         embedding_provider=embedding_provider
                     )
-                    print(f"✅ 상태 저장 완료")
+                    print(f"✅ 상태 저장 완료:")
+                    print(f"   llm_provider: {llm_provider}")
+                    print(f"   embedding_provider: {embedding_provider}")
                     st.success("✅ 문서 로드 및 인덱스 생성 완료!")
                 else:
                     print(f"❌ 인덱스 생성 실패")
@@ -199,6 +218,6 @@ def show():
     st.json({
         "문서_로드됨": current_state.get("documents_loaded", False),
         "인덱스_생성됨": current_state.get("index_loaded", False),
-        "LLM_프로바이더": current_state.get("llm_provider", "gemini"),
+        "LLM_프로바이더": current_state.get("llm_provider", "ollama"),
         "임베딩_프로바이더": current_state.get("embedding_provider", "ollama")
     })

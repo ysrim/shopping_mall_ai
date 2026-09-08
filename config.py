@@ -35,8 +35,8 @@ OLLAMA_EMBEDDING_DIM = 384
 OLLAMA_TIMEOUT = 60
 
 # ==================== 프로바이더 선택 ====================
-LLM_PROVIDER = "gemini"           # "gemini" 또는 "ollama"
-EMBEDDING_PROVIDER = "gemini"     # ✅ "gemini" 또는 "ollama"
+LLM_PROVIDER = "ollama"           # ✅ ollama로 변경
+EMBEDDING_PROVIDER = "ollama"     # ✅ ollama로 변경
 
 # ==================== LLM 생성 파라미터 ====================
 TEMPERATURE = 0.3

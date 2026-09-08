@@ -1,5 +1,6 @@
 import streamlit as st
 from .chatbot_service import ChatbotService
+import time
 
 
 def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
@@ -21,13 +22,29 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
         if user_input:
             st.write(f"**사용자:** {user_input}")
 
+            # ✅ 스핀 아이콘 표시 (컨테이너 사용)
+            status_placeholder = st.empty()
+            result_placeholder = st.empty()
+
             try:
-                with st.spinner("답변 생성 중..."):
-                    response = service.process_message(user_input)
-                st.write(f"**AI:** {response}")
+                with status_placeholder.container():
+                    with st.spinner("⏳ 답변 요청 중..."):
+                        # 응답 생성
+                        response = service.process_message(user_input)
+                        time.sleep(0.5)  # 스핀 아이콘이 보이도록 약간의 대기
+
+                # ✅ 스핀 아이콘 제거 후 완료 메시지 표시
+                status_placeholder.empty()
+
+                with result_placeholder.container():
+                    st.success("✅ 답변 완료!")
+                    st.write(f"**AI:** {response}")
+
                 st.rerun()
+
             except Exception as e:
-                st.error(f"오류 발생: {str(e)}")
+                status_placeholder.empty()
+                st.error(f"❌ 오류 발생: {str(e)}")
     else:
         st.warning("먼저 설정 페이지에서 문서를 로드하고 인덱스를 생성해주세요.")
         st.stop()
