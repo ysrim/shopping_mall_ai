@@ -76,11 +76,15 @@ def show():
                 # 선택된 프로바이더에 맞는 임베딩 API 생성
                 try:
                     embedding_api = llm_factory.create_embedding_api(embedding_provider)
-                    embedder = EmbeddingGenerator(embedding_api)
+                    # ✅ 핵심 수정: API 객체가 아닌 LangChain 임베딩 모델 전달
+                    embeddings_model = embedding_api.get_embeddings()
+                    embedder = EmbeddingGenerator(embeddings_model)
                     embeddings = embedder.generate(chunks)
                 except Exception as e:
                     st.error(f"❌ {embedding_provider.upper()} 임베딩 생성 실패: {str(e)}")
                     st.info("💡 팁: Ollama 사용 시 `ollama serve` 실행 확인 후 재시도하세요.")
+                    import traceback
+                    st.text(traceback.format_exc())
                     return
 
                 if not embeddings:

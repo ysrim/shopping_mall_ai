@@ -46,8 +46,14 @@ if "services" not in st.session_state:
         # Retriever 초기화
         retriever = Retriever(embeddings_model, FAISS_INDEX_PATH)
 
-        # ChatbotService 초기화
-        chatbot_service = ChatbotService(retriever, llm_api, db)
+        # ChatbotService 초기화 (주의: 순서대로 retriever, db, llm_provider)
+        chatbot_service = ChatbotService(
+            retriever=retriever,
+            db=db,
+            llm_provider=initial_llm_provider
+        )
+        # 임베딩 프로바이더도 설정
+        chatbot_service.set_embedding_provider(initial_embedding_provider)
 
         # 세션 상태에 저장
         st.session_state.services = {
