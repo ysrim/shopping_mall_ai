@@ -1,13 +1,11 @@
-# features/shared/api.py
+import json
 import pickle
+import requests
 from pathlib import Path
 from typing import List, Optional
-import time
-import requests
-
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from langchain_community.llms import Ollama
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaLLM
+from langchain_ollama.embeddings import OllamaEmbeddings
 
 from config import (
     GOOGLE_API_KEY,
@@ -15,218 +13,186 @@ from config import (
     EMBEDDING_MODEL,
     EMBEDDING_TASK,
     EMBEDDING_DIM,
+    EMBEDDING_CACHE_PATH,
+    ENABLE_CACHING,
+    LLM_PROVIDER,
+    EMBEDDING_PROVIDER,
+    TEMPERATURE,
+    MAX_TOKENS,
     OLLAMA_BASE_URL,
     OLLAMA_GENERATION_MODEL,
     OLLAMA_EMBEDDING_MODEL,
     OLLAMA_EMBEDDING_DIM,
-    OLLAMA_TIMEOUT,
-    TEMPERATURE,
-    EMBEDDING_CACHE_PATH,
-    LLM_PROVIDER,
-    ENABLE_CACHING,
+    OLLAMA_TIMEOUT
 )
 
 
-# ===== 임베딩 캐시 =====
+# ==================== Embedding Cache ====================
 class EmbeddingCache:
     """임베딩 캐시 관리"""
 
-    def __init__(self, cache_path: Path = EMBEDDING_CACHE_PATH):
+    def __init__(self, cache_path=EMBEDDING_CACHE_PATH):
         self.cache_path = Path(cache_path)
         self.cache = self._load_cache()
 
-    def _load_cache(self) -> dict:
-        """캐시 로드"""
+    def _load_cache(self):
         if self.cache_path.exists():
             try:
                 with open(self.cache_path, 'rb') as f:
                     return pickle.load(f)
             except Exception as e:
-                print(f"⚠️ 캐시 로드 실패: {e}")
+                print(f"⚠️ 캐시 로드 실패: {str(e)}")
                 return {}
         return {}
 
-    def save_cache(self):
-        """캐시 저장"""
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.cache_path, 'wb') as f:
-            pickle.dump(self.cache, f)
-
-    def get(self, key: str) -> Optional[List[float]]:
-        """캐시에서 임베딩 조회"""
+    def get(self, key):
         return self.cache.get(key)
 
-    def set(self, key: str, value: List[float]):
-        """캐시에 임베딩 저장"""
+    def set(self, key, value):
         self.cache[key] = value
-        if ENABLE_CACHING:
-            self.save_cache()
+        self._save_cache()
+
+    def _save_cache(self):
+        try:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.cache_path, 'wb') as f:
+                pickle.dump(self.cache, f)
+        except Exception as e:
+            print(f"⚠️ 캐시 저장 실패: {str(e)}")
 
     def clear(self):
-        """캐시 초기화"""
-        self.cache.clear()
-        self.save_cache()
+        self.cache = {}
+        if self.cache_path.exists():
+            self.cache_path.unlink()
+        print("✅ 캐시 삭제 완료")
 
 
-# ===== Gemini API =====
+# ==================== Gemini API ====================
 class GeminiAPI:
-    """Google Gemini 3.8 Flash API (클라우드)"""
+    """Google Gemini API 래퍼"""
 
     def __init__(self):
-        """Gemini API 초기화"""
-        self.embedding_cache = EmbeddingCache()
+        if not GOOGLE_API_KEY:
+            raise ValueError("❌ GOOGLE_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
+
         try:
             self.llm = ChatGoogleGenerativeAI(
-                model=GENERATION_MODEL,  # gemini-3.8-flash
+                model=GENERATION_MODEL,
+                api_key=GOOGLE_API_KEY,
                 temperature=TEMPERATURE,
-                google_api_key=GOOGLE_API_KEY
+                max_tokens=MAX_TOKENS,
+                convert_system_message_to_human=True
             )
-            self._embeddings = GoogleGenerativeAIEmbeddings(
+
+            self.embeddings = GoogleGenerativeAIEmbeddings(
                 model=EMBEDDING_MODEL,
-                task_type=EMBEDDING_TASK,
-                google_api_key=GOOGLE_API_KEY
+                api_key=GOOGLE_API_KEY,
+                task_type=EMBEDDING_TASK
             )
+
+            self.embedding_cache = EmbeddingCache()
             print(f"✅ Gemini API 로드됨 (모델: {GENERATION_MODEL})")
+
         except Exception as e:
-            print(f"❌ Gemini API 초기화 실패: {e}")
-            raise
+            raise RuntimeError(f"❌ Gemini API 초기화 실패: {str(e)}")
 
     def get_llm(self):
-        """LLM 반환"""
         return self.llm
 
     def get_embeddings(self):
-        """임베딩 모델 반환"""
-        return self._embeddings
-
-    def get_embedding_dimension(self) -> int:
-        """임베딩 차원"""
-        return EMBEDDING_DIM
+        return self.embeddings
 
 
-# ===== Ollama API =====
+# ==================== Ollama API ====================
 class OllamaAPI:
-    """Ollama 로컬 모델 API"""
+    """Ollama 로컬 모델 래퍼"""
 
-    def __init__(self, max_retries: int = 5, retry_delay: int = 2):
-        """
-        Ollama API 초기화
-
-        Args:
-            max_retries: 최대 재시도 횟수
-            retry_delay: 재시도 간격 (초)
-        """
+    def __init__(self, max_retries=5):
+        self.base_url = OLLAMA_BASE_URL
         self.max_retries = max_retries
-        self.retry_delay = retry_delay
+
+        # Ollama 연결 재시도
+        if not self._check_connection():
+            raise RuntimeError(f"❌ Ollama 서버에 연결할 수 없습니다. ({self.base_url})")
 
         try:
-            self._test_connection_with_retry()
-            self.llm = Ollama(
-                base_url=OLLAMA_BASE_URL,
+            self.llm = OllamaLLM(
                 model=OLLAMA_GENERATION_MODEL,
+                base_url=self.base_url,
                 temperature=TEMPERATURE,
-                timeout=OLLAMA_TIMEOUT
+                num_ctx=2048,
             )
-            self._embeddings = OllamaEmbeddings(
-                base_url=OLLAMA_BASE_URL,
-                model=OLLAMA_EMBEDDING_MODEL
+
+            self.embeddings = OllamaEmbeddings(
+                model=OLLAMA_EMBEDDING_MODEL,
+                base_url=self.base_url,
             )
-            print("✅ Ollama API 로드됨")
+
+            self.embedding_cache = EmbeddingCache()
+            print(f"✅ Ollama API 로드됨 (모델: {OLLAMA_GENERATION_MODEL}, 임베딩: {OLLAMA_EMBEDDING_MODEL})")
+
         except Exception as e:
-            raise RuntimeError(
-                f"❌ Ollama 연결 실패: {e}\n"
-                f"✅ 해결: 터미널에서 'ollama serve' 또는 'brew services start ollama' 실행"
-            )
+            raise RuntimeError(f"❌ Ollama API 초기화 실패: {str(e)}")
 
-    def _test_connection_with_retry(self):
-        """재시도 로직을 포함한 연결 테스트"""
-        for attempt in range(self.max_retries):
+    def _check_connection(self):
+        """Ollama 서버 연결 확인"""
+        for attempt in range(1, self.max_retries + 1):
             try:
-                response = requests.get(
-                    f"{OLLAMA_BASE_URL}/api/tags",
-                    timeout=5
-                )
+                response = requests.get(f"{self.base_url}/api/tags", timeout=5)
                 if response.status_code == 200:
-                    print(f"✅ Ollama 연결 성공 (시도: {attempt + 1}/{self.max_retries})")
-                    return
-            except requests.exceptions.ConnectionError:
-                if attempt < self.max_retries - 1:
-                    print(f"⏳ Ollama 연결 대기 중... ({attempt + 1}/{self.max_retries})")
-                    time.sleep(self.retry_delay)
-                else:
-                    raise
+                    print(f"✅ Ollama 연결 성공 (시도 {attempt}/{self.max_retries})")
+                    return True
+            except Exception as e:
+                print(f"⚠️ Ollama 연결 시도 {attempt}/{self.max_retries} 실패: {str(e)}")
+                if attempt < self.max_retries:
+                    import time
+                    time.sleep(2)
 
-        raise RuntimeError("Ollama 서버에 연결할 수 없습니다")
+        return False
 
     def get_llm(self):
-        """LLM 반환"""
         return self.llm
 
     def get_embeddings(self):
-        """임베딩 모델 반환"""
-        return self._embeddings
-
-    def get_embedding_dimension(self) -> int:
-        """임베딩 차원"""
-        return OLLAMA_EMBEDDING_DIM
+        return self.embeddings
 
 
-# ===== LLM 팩토리 =====
+# ==================== LLM Factory ====================
 class LLMFactory:
-    """LLM & 임베딩 API 팩토리 (싱글톤)"""
-
+    """LLM 및 임베딩 API 팩토리 (싱글톤)"""
     _instance = None
-    _current_llm_provider = None
     _llm_instance = None
-    _current_embedding_provider = None
     _embedding_instance = None
 
     def __new__(cls):
-        """싱글톤 패턴"""
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            cls._instance = super(LLMFactory, cls).__new__(cls)
         return cls._instance
 
-    @staticmethod
-    def create_llm_api(provider: str = None):
-        """
-        LLM API 생성
-
-        Args:
-            provider: "gemini" 또는 "ollama"
-
-        Returns:
-            LLM API 인스턴스
-        """
-        factory = LLMFactory()
-
+    def create_llm_api(self, provider=None):
+        """LLM API 생성"""
         if provider is None:
             provider = LLM_PROVIDER
 
-        if factory._current_llm_provider == provider and factory._llm_instance is not None:
-            return factory._llm_instance
+        provider = provider.lower()
 
-        try:
-            if provider == "ollama":
-                factory._llm_instance = OllamaAPI()
-            else:
-                factory._llm_instance = GeminiAPI()
+        if provider == "ollama":
+            try:
+                print(f"🔗 Ollama LLM 연결 중... ({OLLAMA_GENERATION_MODEL})")
+                return OllamaAPI()
+            except Exception as e:
+                print(f"❌ Ollama 연결 실패, Gemini로 폴백: {str(e)}")
+                return GeminiAPI()
+        else:
+            try:
+                print(f"🔗 Gemini LLM 로드 중... ({GENERATION_MODEL})")
+                return GeminiAPI()
+            except Exception as e:
+                print(f"❌ Gemini 로드 실패: {str(e)}")
+                raise
 
-            factory._current_llm_provider = provider
-            return factory._llm_instance
-
-        except Exception as e:
-            print(f"❌ LLM API 생성 실패: {e}")
-            if provider != "gemini":
-                print("⚠️ Gemini로 자동 전환")
-                factory._llm_instance = GeminiAPI()
-                factory._current_llm_provider = "gemini"
-                return factory._llm_instance
-            raise
-
-    @staticmethod
     def create_embedding_api(self, provider=None):
-        """임베딩 프로바이더 선택"""
+        """임베딩 API 생성"""
         if provider is None:
             provider = EMBEDDING_PROVIDER
 
@@ -237,12 +203,16 @@ class LLMFactory:
                 print(f"🔗 Ollama 임베딩 API 연결 중... ({OLLAMA_EMBEDDING_MODEL})")
                 return OllamaAPI()
             except Exception as e:
-                print(f"❌ Ollama 연결 실패, Gemini로 폴백: {str(e)}")
+                print(f"❌ Ollama 임베딩 연결 실패, Gemini로 폴백: {str(e)}")
                 return GeminiAPI()
         else:
-            print(f"🔗 Gemini 임베딩 API 로드 중... ({EMBEDDING_MODEL})")
-            return GeminiAPI()
+            try:
+                print(f"🔗 Gemini 임베딩 API 로드 중... ({EMBEDDING_MODEL})")
+                return GeminiAPI()
+            except Exception as e:
+                print(f"❌ Gemini 임베딩 로드 실패: {str(e)}")
+                raise
 
 
-# ===== 싱글톤 인스턴스 =====
+# 싱글톤 인스턴스
 llm_factory = LLMFactory()
