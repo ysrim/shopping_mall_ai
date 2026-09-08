@@ -46,12 +46,14 @@ if "services" not in st.session_state:
         # Retriever 초기화
         retriever = Retriever(embeddings_model, FAISS_INDEX_PATH)
 
-        # ChatbotService 초기화 (주의: 순서대로 retriever, db, llm_provider)
+        # ChatbotService 초기화
         chatbot_service = ChatbotService(
             retriever=retriever,
             db=db,
             llm_provider=initial_llm_provider
         )
+
+        print(f"✅ Retriever 초기화 완료 (청크 로드됨: {len(retriever.chunks) > 0})")
         # 임베딩 프로바이더도 설정
         chatbot_service.set_embedding_provider(initial_embedding_provider)
 
