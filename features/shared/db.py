@@ -63,13 +63,16 @@ class ChatDatabase:
         """대화를 저장합니다."""
         try:
             cursor = self.conn.cursor()
+            current_time = datetime.now().isoformat()
+
             cursor.execute('''
-                           INSERT INTO chats (user_message, assistant_message, category, llm_provider)
-                           VALUES (?, ?, ?, ?)
-                           ''', (user_message, assistant_message, category, llm_provider))
+                           INSERT INTO chats (user_message, assistant_message, category, llm_provider, timestamp)
+                           VALUES (?, ?, ?, ?, ?)
+                           ''', (user_message, assistant_message, category, llm_provider, current_time))
+
             self.conn.commit()
             chat_id = cursor.lastrowid
-            print(f"✅ 대화 저장: ID={chat_id}, 카테고리={category}")
+            print(f"✅ 대화 저장: ID={chat_id}, 카테고리={category}, 시간={current_time}")
             return chat_id
         except Exception as e:
             print(f"❌ 대화 저장 실패: {e}")
@@ -79,17 +82,30 @@ class ChatDatabase:
         """대화 이력을 조회합니다 (최신순)."""
         try:
             cursor = self.conn.cursor()
+
+            # 🎯 수정: ID 기준으로 정렬 (timestamp 보다 확실함)
             cursor.execute('''
                            SELECT id, user_message, assistant_message, category, rating, llm_provider, timestamp
                            FROM chats
-                           ORDER BY timestamp DESC
+                           ORDER BY id DESC
                                LIMIT ?
                            ''', (limit,))
+
             results = [dict(row) for row in cursor.fetchall()]
-            print(f"✅ 대화 이력 조회: {len(results)}개")
+
+            print(f"✅ 대화 이력 조회: {len(results)}개 (ID 내림차순)")
+
+            # 디버그: 첫 3개 표시
+            if results:
+                for i, r in enumerate(results[:3], 1):
+                    print(f"   [{i}] ID={r['id']}, 시간={r['timestamp']}, 질문={r['user_message'][:30]}...")
+
             return results
+
         except Exception as e:
             print(f"❌ 대화 이력 조회 실패: {e}")
+            import traceback
+            print(traceback.format_exc())
             return []
 
     def rate_message(self, chat_id: int, rating: int) -> bool:
@@ -98,8 +114,11 @@ class ChatDatabase:
             cursor = self.conn.cursor()
             cursor.execute('UPDATE chats SET rating = ? WHERE id = ?', (rating, chat_id))
             self.conn.commit()
-            print(f"✅ 평가 저장: ID={chat_id}, 평가={rating}")
+
+            rating_emoji = {1: "👍", 0: "😐", -1: "👎"}.get(rating, "❓")
+            print(f"✅ 평가 저장: ID={chat_id}, 평가={rating_emoji}")
             return True
+
         except Exception as e:
             print(f"❌ 평가 저장 실패: {e}")
             return False
@@ -112,6 +131,7 @@ class ChatDatabase:
             self.conn.commit()
             print(f"✅ 대화 삭제: ID={chat_id}")
             return True
+
         except Exception as e:
             print(f"❌ 대화 삭제 실패: {e}")
             return False
@@ -124,6 +144,7 @@ class ChatDatabase:
             self.conn.commit()
             print("✅ 모든 대화 삭제 완료")
             return True
+
         except Exception as e:
             print(f"❌ 모든 대화 삭제 실패: {e}")
             return False
@@ -133,22 +154,27 @@ class ChatDatabase:
         try:
             cursor = self.conn.cursor()
 
+            # 1. 총 대화 수
             cursor.execute('SELECT COUNT(*) as total FROM chats')
             total = cursor.fetchone()['total']
 
+            # 2. 평가된 대화
             cursor.execute('SELECT COUNT(*) as rated FROM chats WHERE rating != 0')
             rated = cursor.fetchone()['rated']
 
+            # 3. 좋음 (👍)
             cursor.execute('SELECT COUNT(*) as positive FROM chats WHERE rating = 1')
             positive = cursor.fetchone()['positive']
 
+            # 4. 보통 (😐)
             cursor.execute('SELECT COUNT(*) as neutral FROM chats WHERE rating = 0')
             neutral = cursor.fetchone()['neutral']
 
+            # 5. 나쁨 (👎)
             cursor.execute('SELECT COUNT(*) as negative FROM chats WHERE rating = -1')
             negative = cursor.fetchone()['negative']
 
-            print(f"✅ 통계 조회: 총 {total}개, 평가됨 {rated}개")
+            print(f"✅ 통계 조회: 총 {total}개, 평가됨 {rated}개 (👍 {positive}, 😐 {neutral}, 👎 {negative})")
 
             return {
                 'total_chats': total,
@@ -157,6 +183,7 @@ class ChatDatabase:
                 'neutral_count': neutral,
                 'negative_count': negative,
             }
+
         except Exception as e:
             print(f"❌ 통계 조회 실패: {e}")
             return {
@@ -179,9 +206,9 @@ class ChatDatabase:
                            SELECT user_message,
                                   category,
                                   COUNT(*) as count,
-                    COALESCE(AVG(CASE WHEN rating = 1 THEN 1 WHEN rating = -1 THEN 0 WHEN rating = 0 THEN 0.5 END), 0.5) as avg_satisfaction,
-                    MIN(timestamp) as first_asked,
-                    MAX(timestamp) as last_asked
+                       COALESCE(AVG(CASE WHEN rating = 1 THEN 1 WHEN rating = -1 THEN 0 WHEN rating = 0 THEN 0.5 END), 0.5) as avg_satisfaction,
+                       MIN(timestamp) as first_asked,
+                       MAX(timestamp) as last_asked
                            FROM chats
                            GROUP BY user_message
                            ORDER BY count DESC, avg_satisfaction DESC
@@ -195,9 +222,10 @@ class ChatDatabase:
             for idx, r in enumerate(results, 1):
                 if r['avg_satisfaction'] is None:
                     r['avg_satisfaction'] = 0.5
-                print(f"  #{idx}. {r['user_message'][:50]} | 횟수: {r['count']}, 만족도: {r['avg_satisfaction']:.2f}")
+                print(f"   #{idx}. {r['user_message'][:40]} | 횟수: {r['count']}, 만족도: {r['avg_satisfaction']:.2f}")
 
             return results
+
         except Exception as e:
             print(f"❌ TOP 질문 조회 실패: {e}")
             import traceback
@@ -227,7 +255,13 @@ class ChatDatabase:
 
             results = [dict(row) for row in cursor.fetchall()]
             print(f"✅ 카테고리 통계 조회 완료 (총 {len(results)}개 카테고리)")
+
+            # 결과 로그
+            for r in results:
+                print(f"   - {r['category']}: {r['total']}개, 만족도 {r['satisfaction_rate']}%")
+
             return results
+
         except Exception as e:
             print(f"❌ 카테고리 통계 조회 실패: {e}")
             return []

@@ -26,6 +26,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 GENERATION_MODEL = "gemini-3.5-flash-lite"
 
 # ==================== Ollama 로컬 모델 (고정) ====================
+# ==================== Ollama 로컬 모델 (고정) ====================
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_GENERATION_MODEL = "qwen2.5:14b-instruct-q4_0"
 OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
@@ -49,7 +50,7 @@ MAX_TOKENS = 2000
 NUM_WORKERS = 4
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
-TOP_K = 2  # 검색 결과 상위 K개
+TOP_K = 10  # 검색 결과 상위 K개
 
 # ==================== 데이터베이스 설정 ====================
 DATABASE_TIMEOUT = 10

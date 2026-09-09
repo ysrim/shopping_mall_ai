@@ -19,7 +19,7 @@ class ChatbotService:
         self.db = db
         self.llm_provider = llm_provider or LLM_PROVIDER
         self.llm = None
-        self.top_k = 5  # 검색 결과 상위 K개
+        self.top_k = 10  # 🎯 수정: 5에서 10으로 증가!
 
         print(f"🔗 ChatbotService 초기화")
         print(f"   - LLM 프로바이더: {self.llm_provider}")
@@ -49,6 +49,10 @@ class ChatbotService:
         Returns:
             생성된 프롬프트
         """
+        # 컨텍스트가 비어있으면 안내 메시지 추가
+        if not context or context.strip() == "":
+            context = "검색된 관련 정보가 없습니다."
+
         prompt = f"""당신은 전문적이고 친절한 쇼핑 고객 서비스 어시스턴트입니다.
 아래의 제공된 정보를 바탕으로 사용자의 질문에 정확하고 도움이 되는 답변을 해주세요.
 
@@ -59,10 +63,12 @@ class ChatbotService:
 {query}
 
 【답변 지침】
-1. 제공된 정보에만 기반하여 답변하세요.
-2. 정보에 없는 내용은 "해당 정보는 제공되지 않았습니다"라고 명확히 답변하세요.
-3. 친절하고 존중하는 태도로 답변하세요.
-4. 필요한 경우 요약이나 구조화된 형식으로 답변하세요.
+1. 제공된 정보에서 질문과 관련된 내용을 모두 찾아서 답변하세요.
+2. 배송 기간, 배송비, 배송 방법, 회원등급, 반품정책 등 구체적인 정보를 포함하세요.
+3. 정보에 없는 내용은 "해당 정보는 제공되지 않았습니다"라고 명확히 답변하세요.
+4. 친절하고 존중하는 태도로 답변하세요.
+5. 필요한 경우 요약이나 구조화된 형식으로 답변하세요.
+6. 고객센터 연락처가 필요하면 02-XXXX-XXXX (평일 09:00-18:00, 토 10:00-16:00)를 안내하세요.
 
 답변:"""
         return prompt
@@ -78,15 +84,20 @@ class ChatbotService:
             포맷팅된 컨텍스트 문자열
         """
         if not retrieved_docs:
-            return "검색된 정보가 없습니다."
+            return ""
 
         context_parts = []
         for i, doc in enumerate(retrieved_docs, 1):
+            # 🎯 중요: 'chunk' 필드 사용!
             content = doc.get('chunk', doc.get('content', ''))
             relevance = doc.get('distance', 'N/A')
-            context_parts.append(f"[정보 {i}] (유사도: {relevance})\n{content}")
 
-        return "\n\n".join(context_parts)
+            if content:  # 빈 문자열이 아닐 때만 추가
+                context_parts.append(f"[정보 {i}] (유사도: {relevance})\n{content}")
+
+        result = "\n\n".join(context_parts)
+        print(f"📋 컨텍스트 구성: {len(context_parts)}개 정보, 총 {len(result)}자")
+        return result
 
     def _extract_response(self, llm_response) -> str:
         """
@@ -195,6 +206,7 @@ class ChatbotService:
 
             # 1. 문서 검색 (RAG)
             print("🔍 문서 검색 중...")
+            # 🎯 수정: top_k를 10으로 증가시켜 더 많은 청크 검색
             retrieved_docs = self.retriever.retrieve(user_message, top_k=self.top_k)
 
             if not retrieved_docs:
@@ -203,7 +215,8 @@ class ChatbotService:
             else:
                 print(f"✅ {len(retrieved_docs)}개 문서 검색 완료")
                 for i, doc in enumerate(retrieved_docs, 1):
-                    print(f"   [{i}] 유사도: {doc.get('distance', 'N/A')}, 내용길이: {len(doc.get('chunk', ''))}자")
+                    chunk_content = doc.get('chunk', '')
+                    print(f"   [{i}] 유사도: {doc.get('distance', 'N/A')}, 내용길이: {len(chunk_content)}자")
                 print()
 
                 # 2. 컨텍스트 구성
@@ -294,15 +307,7 @@ class ChatbotService:
             return 'general'
 
     def get_history(self, limit: int = 50) -> list:
-        """
-        대화 히스토리 조회
-
-        Args:
-            limit: 조회 개수 (기본: 50)
-
-        Returns:
-            대화 리스트
-        """
+        """대화 히스토리 조회"""
         try:
             print(f"📋 히스토리 조회 중 (최대 {limit}개)...")
             history = self.db.get_history(limit)
@@ -313,16 +318,7 @@ class ChatbotService:
             return []
 
     def rate_message(self, chat_id: int, rating: int) -> bool:
-        """
-        메시지에 평가 추가
-
-        Args:
-            chat_id: 대화 ID
-            rating: 평가 (1: 좋음, 0: 보통, -1: 나쁨)
-
-        Returns:
-            성공 여부
-        """
+        """메시지에 평가 추가"""
         try:
             rating_emoji = {1: "👍", 0: "😐", -1: "👎"}.get(rating, "❓")
             print(f"⭐ 평가 저장 중: {rating_emoji} (ID: {chat_id})...")
@@ -335,15 +331,7 @@ class ChatbotService:
             return False
 
     def delete_message(self, chat_id: int) -> bool:
-        """
-        대화 삭제
-
-        Args:
-            chat_id: 대화 ID
-
-        Returns:
-            성공 여부
-        """
+        """대화 삭제"""
         try:
             print(f"🗑️ 대화 삭제 중 (ID: {chat_id})...")
             success = self.db.delete_chat(chat_id)
@@ -355,12 +343,7 @@ class ChatbotService:
             return False
 
     def clear_history(self) -> bool:
-        """
-        모든 대화 히스토리 삭제
-
-        Returns:
-            성공 여부
-        """
+        """모든 대화 히스토리 삭제"""
         try:
             print(f"🗑️ 모든 대화 삭제 중...")
             success = self.db.clear_history()
@@ -372,12 +355,7 @@ class ChatbotService:
             return False
 
     def get_statistics(self) -> dict:
-        """
-        대화 통계 조회
-
-        Returns:
-            통계 정보
-        """
+        """대화 통계 조회"""
         try:
             print(f"📊 통계 조회 중...")
             stats = self.db.get_statistics()
@@ -388,15 +366,7 @@ class ChatbotService:
             return {}
 
     def change_llm_provider(self, provider: str) -> bool:
-        """
-        LLM 프로바이더 변경
-
-        Args:
-            provider: 새로운 프로바이더 ("gemini" 또는 "ollama")
-
-        Returns:
-            성공 여부
-        """
+        """LLM 프로바이더 변경"""
         try:
             if provider not in ["gemini", "ollama"]:
                 print(f"❌ 유효하지 않은 프로바이더: {provider}")
@@ -412,15 +382,7 @@ class ChatbotService:
             return False
 
     def update_retriever(self, retriever: Retriever) -> bool:
-        """
-        문서 검색기 업데이트
-
-        Args:
-            retriever: 새로운 Retriever 객체
-
-        Returns:
-            성공 여부
-        """
+        """문서 검색기 업데이트"""
         try:
             print(f"🔄 Retriever 업데이트 중...")
             self.retriever = retriever
