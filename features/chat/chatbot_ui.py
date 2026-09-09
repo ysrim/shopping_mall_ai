@@ -1,88 +1,27 @@
 import streamlit as st
 import time
 from features.chat.chatbot_service import ChatbotService
+from features.shared.ui_utils import (
+    show_status_cards,
+    render_chat_card,
+    render_rating_buttons,
+    handle_error
+)
 
 
 def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
     st.title("💬 AI 쇼핑 어시스턴트")
 
     # ==================== 상태 표시 ====================
-    col1, col2 = st.columns(2)
-    with col1:
-        st.info(f"📄 문서: {'✅ 로드됨' if docs_loaded else '❌ 미로드'}")
-    with col2:
-        st.info(f"🔍 인덱스: {'✅ 생성됨' if index_loaded else '❌ 미생성'}")
-
-    st.divider()
+    show_status_cards(docs_loaded, index_loaded)
 
     # ==================== 문서 및 인덱스 체크 ====================
-    if not docs_loaded or not index_loaded:
-        st.warning("⚠️ 먼저 설정 페이지에서 문서를 로드하고 인덱스를 생성해주세요.")
+    if not show_status_cards(docs_loaded, index_loaded):
         st.stop()
 
-    # ==================== 대화 히스토리 (맨 위) ====================
     print("\n" + "=" * 60)
     print("📄 채팅 페이지 진입")
     print("=" * 60 + "\n")
-
-    st.subheader("📋 대화 히스토리 (최신순)")
-
-    try:
-        print("\n📋 히스토리 로드 중...")
-        chat_history = service.get_history()
-
-        if chat_history:
-            print(f"✅ 히스토리 로드 완료: {len(chat_history)}개\n")
-
-            # 역순으로 정렬 (최신이 맨 위)
-            chat_history = list(reversed(chat_history))
-
-            for chat in chat_history:
-                with st.container(border=True):
-                    # 대화 내용 표시
-                    col1, col2 = st.columns([9, 1])
-
-                    with col1:
-                        st.write(f"**👤 사용자:** {chat.get('user_message', 'N/A')}")
-                        st.write(f"**🤖 AI:** {chat.get('assistant_message', 'N/A')}")
-
-                    with col2:
-                        # 삭제 버튼
-                        if st.button("🗑️", key=f"delete_{chat['id']}", help="대화 삭제"):
-                            service.delete_message(chat['id'])
-                            st.info("삭제되었습니다.")
-                            time.sleep(0.5)
-                            st.rerun()
-
-                    # 평가 표시
-                    if chat.get('rating') is not None:
-                        rating_emoji = {1: "👍", 0: "😐", -1: "👎"}.get(chat['rating'], "")
-                        st.caption(f"평가: {rating_emoji}")
-                    else:
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            if st.button("👍", key=f"like_{chat['id']}"):
-                                service.rate_message(chat['id'], 1)
-                                st.rerun()
-                        with col2:
-                            if st.button("😐", key=f"neutral_{chat['id']}"):
-                                service.rate_message(chat['id'], 0)
-                                st.rerun()
-                        with col3:
-                            if st.button("👎", key=f"dislike_{chat['id']}"):
-                                service.rate_message(chat['id'], -1)
-                                st.rerun()
-        else:
-            st.info("아직 대화가 없습니다.")
-            print("ℹ️ 대화 히스토리가 비어있습니다")
-
-    except Exception as e:
-        print(f"❌ 히스토리 로드 오류: {str(e)}")
-        import traceback
-        print(traceback.format_exc())
-        st.warning(f"⚠️ 히스토리 로드 중 오류 발생: {str(e)}")
-
-    st.divider()
 
     # ==================== Session State 초기화 ====================
     if "chat_response" not in st.session_state:
@@ -90,12 +29,32 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
     if "show_response" not in st.session_state:
         st.session_state.show_response = False
 
+    # ==================== 대화 히스토리 (맨 위) ====================
+    st.subheader("📋 대화 히스토리 (최신순)")
+
+    def load_history():
+        chat_history = service.get_history()
+        return list(reversed(chat_history)) if chat_history else []
+
+    chat_history = handle_error(
+        load_history,
+        error_message="히스토리 로드 실패"
+    )
+
+    if chat_history:
+        print(f"✅ 히스토리 로드 완료: {len(chat_history)}개\n")
+        for chat in chat_history:
+            render_chat_card(chat, service, show_buttons=True, show_delete=True)
+    else:
+        st.info("아직 대화가 없습니다.")
+        print("ℹ️ 대화 히스토리가 비어있습니다")
+
+    st.divider()
+
     # ==================== 사용자 입력 및 답변 (맨 아래) ====================
     st.subheader("💬 새로운 질문")
 
     user_input = st.chat_input("질문을 입력하세요...")
-
-    print(f"🔍 chat_input 값: {user_input}")
 
     if user_input:
         print(f"✅ 사용자 입력 감지: {user_input}\n")
@@ -107,33 +66,22 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
         # 로딩 중 표시
         print("⏳ 스핀 시작...")
         with st.spinner("⏳ 답변 요청 중..."):
-            time.sleep(0.3)  # UI 렌더링 보장
+            time.sleep(0.3)
 
-            try:
-                print("🔄 process_message 호출 중...")
-                response = service.process_message(user_input)
+            def process_input():
+                return service.process_message(user_input)
 
-                # 🎯 디버그: 응답 확인
-                print(f"🎯 응답 값: '{response}'")
-                print(f"🎯 응답 타입: {type(response)}")
-                print(f"🎯 응답 길이: {len(response) if response else 0}")
+            response = handle_error(
+                process_input,
+                error_message="메시지 처리 실패"
+            )
 
-                # Session State에 저장
+            if response:
                 st.session_state.chat_response = response
                 st.session_state.show_response = True
-
                 print(f"✅ process_message 완료: {response[:50] if response else 'None'}...\n")
 
-            except Exception as e:
-                print(f"❌ process_message 오류: {str(e)}")
-                import traceback
-                print(traceback.format_exc())
-                st.error(f"❌ 오류 발생: {str(e)}")
-                st.stop()
-
-        print("✅ 완료 메시지 표시 중...")
-
-    # Session State에서 응답 표시 (여기서 항상 실행됨)
+    # Session State에서 응답 표시
     if st.session_state.show_response and st.session_state.chat_response:
         st.success("✅ 답변 완료!")
 
@@ -142,38 +90,4 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
 
         # 평가 버튼
         st.subheader("이 답변이 도움이 되었나요?")
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            if st.button("👍 도움됨", key="like_new"):
-                # 최신 대화 ID 찾기
-                history = service.get_history()
-                if history:
-                    latest_id = history[0]['id']
-                    service.rate_message(latest_id, 1)
-                    st.success("👍 평가가 저장되었습니다!")
-                    st.session_state.show_response = False  # 응답 숨기기
-                    time.sleep(1)
-                    st.rerun()
-
-        with col2:
-            if st.button("😐 보통", key="neutral_new"):
-                history = service.get_history()
-                if history:
-                    latest_id = history[0]['id']
-                    service.rate_message(latest_id, 0)
-                    st.info("😐 평가가 저장되었습니다!")
-                    st.session_state.show_response = False
-                    time.sleep(1)
-                    st.rerun()
-
-        with col3:
-            if st.button("👎 도움안됨", key="dislike_new"):
-                history = service.get_history()
-                if history:
-                    latest_id = history[0]['id']
-                    service.rate_message(latest_id, -1)
-                    st.warning("👎 평가가 저장되었습니다!")
-                    st.session_state.show_response = False
-                    time.sleep(1)
-                    st.rerun()
+        render_rating_buttons(chat_id=-1, service=service, button_style="new")
