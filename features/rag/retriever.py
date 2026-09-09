@@ -90,8 +90,21 @@ class Retriever:
 
             print(f"✅ 청크 로드 완료: {len(self.chunks)}개")
             if self.chunks:
-                print(f"   첫 번째 청크: {self.chunks[0][:100]}...")
-                print(f"   마지막 청크: {self.chunks[-1][:100]}...")
+                # 첫 번째 청크가 문자열인지 딕셔너리인지 확인
+                first_chunk = self.chunks[0]
+                if isinstance(first_chunk, dict):
+                    preview = str(first_chunk.get('content', first_chunk))[:100]
+                else:
+                    preview = str(first_chunk)[:100]
+
+                last_chunk = self.chunks[-1]
+                if isinstance(last_chunk, dict):
+                    preview_last = str(last_chunk.get('content', last_chunk))[:100]
+                else:
+                    preview_last = str(last_chunk)[:100]
+
+                print(f"   첫 번째 청크: {preview}...")
+                print(f"   마지막 청크: {preview_last}...")
 
             # 4. 검증
             print(f"\n🔍 인덱스 검증")
@@ -110,17 +123,20 @@ class Retriever:
             print(traceback.format_exc())
             return False
 
+    def _extract_chunk_content(self, chunk) -> str:
+        """청크에서 텍스트 내용을 추출합니다."""
+        if isinstance(chunk, dict):
+            # 딕셔너리인 경우, content 필드 확인
+            return str(chunk.get('content', str(chunk)))
+        elif isinstance(chunk, str):
+            # 문자열인 경우 그대로 반환
+            return chunk
+        else:
+            # 다른 타입인 경우 문자열로 변환
+            return str(chunk)
+
     def retrieve(self, query: str, top_k: int = 2) -> List[Dict]:
-        """
-        쿼리와 유사한 문서를 검색합니다.
-
-        Args:
-            query: 검색 쿼리
-            top_k: 상위 K개 결과
-
-        Returns:
-            검색 결과 리스트 ({"chunk": 텍스트, "distance": 거리})
-        """
+        """쿼리와 유사한 문서를 검색합니다."""
         try:
             print(f"\n{'=' * 60}")
             print(f"🔍 문서 검색 시작")
@@ -137,6 +153,12 @@ class Retriever:
             print(f"   - 인덱스 차원: {self.index.d if hasattr(self.index, 'd') else 'unknown'}")
             print(f"   - 저장된 벡터 개수: {self.index.ntotal}")
             print(f"   - 로드된 청크 개수: {len(self.chunks)}")
+
+            # 🎯 디버그: 청크 샘플 출력
+            if self.chunks:
+                print(f"\n📝 청크 샘플:")
+                for i in range(min(3, len(self.chunks))):
+                    print(f"   [{i}] 길이={len(self.chunks[i])}, 내용={str(self.chunks[i])[:50]}...")
 
             if len(self.chunks) == 0:
                 print(f"❌ 청크가 비어있습니다!")
@@ -161,10 +183,12 @@ class Retriever:
             print(f"✅ FAISS 검색 완료: {len(indices[0])}개 결과")
             for i, idx in enumerate(indices[0]):
                 if 0 <= idx < len(self.chunks):
-                    chunk_len = len(self.chunks[idx])
+                    chunk = self.chunks[idx]
+                    chunk_content = self._extract_chunk_content(chunk)
+                    chunk_len = len(chunk_content)
+                    print(f"   ✅ 청크 {idx}: 거리={distances[0][i]:.4f}, 길이={chunk_len}자, 내용={chunk_content[:50]}...")
                 else:
-                    chunk_len = 0
-                print(f"   ✅ 청크 {idx}: 거리={distances[0][i]:.4f}, 길이={chunk_len}자")
+                    print(f"   ❌ 인덱스 범위 초과: {idx} (최대: {len(self.chunks) - 1})")
 
             # 결과 처리
             results = []
@@ -175,15 +199,17 @@ class Retriever:
 
                 if 0 <= idx < len(self.chunks):
                     chunk = self.chunks[idx]
+                    chunk_content = self._extract_chunk_content(chunk)
                     distance = float(distances[0][i])
 
                     print(f"       ✅ 청크 발견!")
-                    print(f"       내용: {chunk[:80]}...")
-                    print(f"       길이: {len(chunk)}자")
+                    print(f"       타입: {type(chunk)}")
+                    print(f"       내용: {chunk_content[:80]}...")
+                    print(f"       길이: {len(chunk_content)}자")
                     print(f"       거리: {distance:.4f}")
 
                     results.append({
-                        "chunk": chunk,
+                        "chunk": chunk_content,
                         "distance": distance
                     })
                 else:

@@ -84,6 +84,12 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
 
     st.divider()
 
+    # ==================== Session State 초기화 ====================
+    if "chat_response" not in st.session_state:
+        st.session_state.chat_response = None
+    if "show_response" not in st.session_state:
+        st.session_state.show_response = False
+
     # ==================== 사용자 입력 및 답변 (맨 아래) ====================
     st.subheader("💬 새로운 질문")
 
@@ -106,6 +112,16 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
             try:
                 print("🔄 process_message 호출 중...")
                 response = service.process_message(user_input)
+
+                # 🎯 디버그: 응답 확인
+                print(f"🎯 응답 값: '{response}'")
+                print(f"🎯 응답 타입: {type(response)}")
+                print(f"🎯 응답 길이: {len(response) if response else 0}")
+
+                # Session State에 저장
+                st.session_state.chat_response = response
+                st.session_state.show_response = True
+
                 print(f"✅ process_message 완료: {response[:50] if response else 'None'}...\n")
 
             except Exception as e:
@@ -115,12 +131,14 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
                 st.error(f"❌ 오류 발생: {str(e)}")
                 st.stop()
 
-        # 응답 표시
         print("✅ 완료 메시지 표시 중...")
+
+    # Session State에서 응답 표시 (여기서 항상 실행됨)
+    if st.session_state.show_response and st.session_state.chat_response:
         st.success("✅ 답변 완료!")
 
         with st.chat_message("assistant"):
-            st.write(response)
+            st.write(st.session_state.chat_response)
 
         # 평가 버튼
         st.subheader("이 답변이 도움이 되었나요?")
@@ -134,6 +152,7 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
                     latest_id = history[0]['id']
                     service.rate_message(latest_id, 1)
                     st.success("👍 평가가 저장되었습니다!")
+                    st.session_state.show_response = False  # 응답 숨기기
                     time.sleep(1)
                     st.rerun()
 
@@ -144,6 +163,7 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
                     latest_id = history[0]['id']
                     service.rate_message(latest_id, 0)
                     st.info("😐 평가가 저장되었습니다!")
+                    st.session_state.show_response = False
                     time.sleep(1)
                     st.rerun()
 
@@ -154,5 +174,6 @@ def show(service: ChatbotService, docs_loaded: bool, index_loaded: bool):
                     latest_id = history[0]['id']
                     service.rate_message(latest_id, -1)
                     st.warning("👎 평가가 저장되었습니다!")
+                    st.session_state.show_response = False
                     time.sleep(1)
                     st.rerun()
